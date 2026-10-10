@@ -1682,10 +1682,20 @@ final class SitesViewModel: ObservableObject {
     }
 }
 
+private enum SitesContentSection: String, CaseIterable, Identifiable {
+    case sites = "站点"
+    case telegram = "TG 签到"
+
+    var id: String { rawValue }
+}
+
 struct SitesView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openURL) private var openURL
     @StateObject private var model = SitesViewModel()
+    @StateObject private var telegramController = TelegramSessionController.shared
+    @StateObject private var telegramStore = TelegramCheckinStore.shared
+    @State private var selectedSection: SitesContentSection = .sites
     @State private var showAdd = false
     @State private var showFilters = false
     @State private var showImport = false
@@ -1702,61 +1712,72 @@ struct SitesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.usingCachedData {
-                SessionCacheBanner(cachedAt: model.cachedAt)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
+            Picker("站点类型", selection: $selectedSection) {
+                ForEach(SitesContentSection.allCases) { section in
+                    Text(section.rawValue).tag(section)
+                }
             }
-            SiteSearchFilterBar(
-                model: model,
-                openFilters: { showFilters = true },
-                openAdd: { showAdd = true },
-                openImport: { showImport = true },
-                openGenerator: { showGenerator = true },
-                openTimeline: { showTimeline = true }
-            )
-            Group {
-                // Keep cached rows visible while a background refresh is in flight.
-                // A transient refresh must not replace an already usable site list
-                // with a full-page spinner.
-                if model.isLoading && model.sites.isEmpty { LoadingState() }
-                else if model.filtered.isEmpty {
-                    EmptyState(
-                        icon: "globe.badge.chevron.backward",
-                        title: model.sites.isEmpty ? "还没有站点" : "没有匹配站点",
-                        detail: model.sites.isEmpty ? "添加站点后可同步流量、签到和辅种状态" : "调整搜索或筛选条件后再试",
-                        actionTitle: model.sites.isEmpty ? "添加站点" : "清除筛选"
-                    ) {
-                        if model.sites.isEmpty { showAdd = true }
-                        else { model.resetFilters() }
-                    }
-                } else {
-                    SiteListSummaryBar(
-                        visibleCount: model.filtered.count,
-                        totalCount: model.sites.count,
-                        activeCount: model.activeSiteCount,
-                        pendingSignInCount: model.pendingSignInCount,
-                        unreadCount: model.unreadCount,
-                        showActiveSites: model.showActiveSites,
-                        showPendingSignInSites: model.showPendingSignInSites,
-                        showUnreadSites: model.showUnreadSites
-                    )
-                    List {
-                        ForEach(model.filtered) { site in
-                            SiteRow(
-                                site: site,
-                                privacy: appState.privacyMode,
-                                iconCandidates: model.logoCandidates(for: site, appState: appState),
-                                milestone: model.milestone(for: site),
-                                levelColor: model.levelColor(for: site),
-                                isRefreshing: model.isRefreshing(site),
-                                onOpenDetails: { selectedSite = site },
-                                onOpenBrowser: { openBrowser(for: site) },
-                                onOpenExternalBrowser: { openExternalBrowser(for: site) },
-                                onOpenLevel: { levelSite = site },
-                                onOpenSignIn: { signInSite = site }
-                            )
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, 3)
+
+            if selectedSection == .sites {
+                if model.usingCachedData {
+                    SessionCacheBanner(cachedAt: model.cachedAt)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                }
+                SiteSearchFilterBar(
+                    model: model,
+                    openFilters: { showFilters = true },
+                    openAdd: { showAdd = true },
+                    openImport: { showImport = true },
+                    openGenerator: { showGenerator = true },
+                    openTimeline: { showTimeline = true }
+                )
+                Group {
+                    // Keep cached rows visible while a background refresh is in flight.
+                    // A transient refresh must not replace an already usable site list
+                    // with a full-page spinner.
+                    if model.isLoading && model.sites.isEmpty { LoadingState() }
+                    else if model.filtered.isEmpty {
+                        EmptyState(
+                            icon: "globe.badge.chevron.backward",
+                            title: model.sites.isEmpty ? "还没有站点" : "没有匹配站点",
+                            detail: model.sites.isEmpty ? "添加站点后可同步流量、签到和辅种状态" : "调整搜索或筛选条件后再试",
+                            actionTitle: model.sites.isEmpty ? "添加站点" : "清除筛选"
+                        ) {
+                            if model.sites.isEmpty { showAdd = true }
+                            else { model.resetFilters() }
+                        }
+                    } else {
+                        SiteListSummaryBar(
+                            visibleCount: model.filtered.count,
+                            totalCount: model.sites.count,
+                            activeCount: model.activeSiteCount,
+                            pendingSignInCount: model.pendingSignInCount,
+                            unreadCount: model.unreadCount,
+                            showActiveSites: model.showActiveSites,
+                            showPendingSignInSites: model.showPendingSignInSites,
+                            showUnreadSites: model.showUnreadSites
+                        )
+                        List {
+                            ForEach(model.filtered) { site in
+                                SiteRow(
+                                    site: site,
+                                    privacy: appState.privacyMode,
+                                    iconCandidates: model.logoCandidates(for: site, appState: appState),
+                                    milestone: model.milestone(for: site),
+                                    levelColor: model.levelColor(for: site),
+                                    isRefreshing: model.isRefreshing(site),
+                                    onOpenDetails: { selectedSite = site },
+                                    onOpenBrowser: { openBrowser(for: site) },
+                                    onOpenExternalBrowser: { openExternalBrowser(for: site) },
+                                    onOpenLevel: { levelSite = site },
+                                    onOpenSignIn: { signInSite = site }
+                                )
                                 .contextMenu { SiteActions(site: site, model: model) }
                                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                     Button { Task { await model.operate(appState, site: site, path: APIPath.siteSign) } } label: { Label("签到", systemImage: "checkmark.seal") }.tint(HarvestTheme.green)
@@ -1769,39 +1790,44 @@ struct SitesView: View {
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
+                            }
                         }
+                        .listStyle(.plain)
+                        .listRowSpacing(0)
+                        .contentMargins(.vertical, 0, for: .scrollContent)
+                        .scrollDismissesKeyboard(.immediately)
+                        .scrollContentBackground(.hidden)
+                        .background(Color(uiColor: .systemGroupedBackground))
+                        .environment(\.harvestFlowEffectsPaused, model.isPullRefreshSettling)
+                        .refreshable { await model.pullToRefresh(appState) }
                     }
-                    .listStyle(.plain)
-                    .listRowSpacing(0)
-                    .contentMargins(.vertical, 0, for: .scrollContent)
-                    .scrollDismissesKeyboard(.immediately)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    .environment(\.harvestFlowEffectsPaused, model.isPullRefreshSettling)
-                    .refreshable { await model.pullToRefresh(appState) }
                 }
+            } else {
+                TelegramBotsPanel(controller: telegramController, store: telegramStore)
             }
         }
         .navigationTitle("站点")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Menu {
-                    Button { Task { await runGlobalAction(APIPath.siteStatus) } } label: {
-                        Label("刷新全部站点", systemImage: "arrow.clockwise")
+                if selectedSection == .sites {
+                    Menu {
+                        Button { Task { await runGlobalAction(APIPath.siteStatus) } } label: {
+                            Label("刷新全部站点", systemImage: "arrow.clockwise")
+                        }
+                        Button { Task { await runGlobalAction(APIPath.siteSign) } } label: {
+                            Label("全部站点签到", systemImage: "checkmark.seal")
+                        }
+                    } label: {
+                        if isRunningGlobalAction {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
                     }
-                    Button { Task { await runGlobalAction(APIPath.siteSign) } } label: {
-                        Label("全部站点签到", systemImage: "checkmark.seal")
-                    }
-                } label: {
-                    if isRunningGlobalAction {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                    }
+                    .disabled(isRunningGlobalAction)
+                    .accessibilityLabel("批量站点操作")
                 }
-                .disabled(isRunningGlobalAction)
-                .accessibilityLabel("批量站点操作")
             }
         }
         // The shell may be created before the stored session finishes restoring.

@@ -1,6 +1,6 @@
 # iOS Native Migration Audit
 
-Audit date: 2026-09-30
+Audit date: 2026-10-10
 
 Reference: the Flutter implementation in the parent repository and its active
 UI/service call sites.
@@ -20,6 +20,15 @@ An authoritative 1:1 result still requires an Xcode 26 build, API integration
 pass, and device testing against a reachable Harvest server.
 
 ## Latest Corrections
+
+- An iOS-only Telegram check-in workflow was added without extending the Harvest
+  backend contract. The Sites screen now includes a Telegram Bot card list with
+  local CRUD, Telegram user authorization through TDLib, manual and bulk command
+  execution, response keyword matching, timeout/retry handling, persistent run
+  history, and foreground schedule checks. API credentials and the TDLib database
+  encryption key are held in Keychain; TDLib session data is persisted locally and
+  excluded from backup. Scheduled execution is intentionally documented as
+  foreground-only because iOS cannot guarantee a permanent client process.
 
 - The Flutter delta from `5e3e3c09` through release `96268b5e` was reviewed.
   It only updates the Android AGP/Kotlin toolchain, refreshes Flutter dependency

@@ -19,6 +19,14 @@ the same bundle identifier side by side.
 
 ### 2026.0930.01 (296) - 2026-09-30
 
+- 新增完全运行在 iOS 本机的 Telegram Bot 签到模块，不改 Harvest 后端：站点页
+  增加“站点 / TG 签到”分段，支持添加、编辑、停用、删除 Bot，手动或批量发送
+  签到命令，并按成功/失败关键词判断回复、记录耗时与完整执行历史。
+- 接入官方 TDLib 的 Swift 封装 TDLibKit，以 Telegram 用户账号向第三方 Bot 发消息；
+  补齐 API ID/API Hash、手机号、验证码和两步验证登录流程，凭据与数据库加密密钥
+  存入钥匙串，TDLib 会话数据库持久化并排除 iCloud/设备备份。
+- TG Bot 支持按星期和时间前台定时签到、回复超时与有限重试、Bot 会话 ID 缓存、
+  Telegram 外部跳转和操作反馈；明确 iOS 挂起或终止 App 后不保证定时任务执行。
 - 修正下载器实时数据解析：活跃数、暂停数和总数只读取实时响应的标准字段，
   qB/TR 会话流量按各自数据结构读取，真实的 0 值可覆盖旧缓存，避免卡片与
   下载器内部统计不一致；HTTP 汇总兜底不再覆盖较新的 WebSocket 实时数据。
@@ -91,6 +99,7 @@ the same bundle identifier side by side.
 - SwiftUI navigation and forms
 - Native iOS 26 Liquid Glass navigation with an ultra-thin-material fallback
 - Swift Concurrency and URLSession networking
+- TDLibKit/TDLib for local Telegram user authorization and Bot check-in commands
 - Keychain token and credential storage
 - Account-scoped persistent caches for dashboard, sites, media catalogs,
   downloads, scheduled tasks, and notices

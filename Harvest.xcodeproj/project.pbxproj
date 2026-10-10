@@ -19,6 +19,8 @@
 		10000000000000000000000A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* PrivacyInfo.xcprivacy */; };
 		10000000000000000000000B /* PerformanceMonitoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* PerformanceMonitoring.swift */; };
 		10000000000000000000000C /* SafariExtensionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000F /* SafariExtensionSupport.swift */; };
+		10000000000000000000000D /* TelegramCheckinFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* TelegramCheckinFeatures.swift */; };
+		10000000000000000000000E /* TDLibKit in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000002 /* TDLibKit */; };
 		B00000000000000000000001 /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* SafariWebExtensionHandler.swift */; };
 		B00000000000000000000002 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* manifest.json */; };
 		B00000000000000000000003 /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* background.js */; };
@@ -90,6 +92,7 @@
 		20000000000000000000000D /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		20000000000000000000000E /* PerformanceMonitoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceMonitoring.swift; sourceTree = "<group>"; };
 		20000000000000000000000F /* SafariExtensionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariExtensionSupport.swift; sourceTree = "<group>"; };
+		200000000000000000000010 /* TelegramCheckinFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramCheckinFeatures.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000002 /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = manifest.json; sourceTree = "<group>"; };
@@ -120,6 +123,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				10000000000000000000000E /* TDLibKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -164,6 +168,7 @@
 				200000000000000000000005 /* SecondaryFeatures.swift */,
 				200000000000000000000006 /* ManagementFeatures.swift */,
 				20000000000000000000000F /* SafariExtensionSupport.swift */,
+				200000000000000000000010 /* TelegramCheckinFeatures.swift */,
 				200000000000000000000007 /* Assets.xcassets */,
 				200000000000000000000008 /* Info.plist */,
 				20000000000000000000000D /* PrivacyInfo.xcprivacy */,
@@ -251,6 +256,9 @@
 				D80000000000000000000001 /* PBXTargetDependency */,
 			);
 			name = Harvest;
+			packageProductDependencies = (
+				E20000000000000000000002 /* TDLibKit */,
+			);
 			productName = Harvest;
 			productReference = 200000000000000000000009 /* Harvest.app */;
 			productType = "com.apple.product-type.application";
@@ -320,6 +328,9 @@
 				zh_CN,
 			);
 			mainGroup = 400000000000000000000001;
+			packageReferences = (
+				E10000000000000000000001 /* XCRemoteSwiftPackageReference "TDLibKit" */,
+			);
 			productRefGroup = 400000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -389,6 +400,7 @@
 				100000000000000000000005 /* SecondaryFeatures.swift in Sources */,
 				100000000000000000000006 /* ManagementFeatures.swift in Sources */,
 				10000000000000000000000C /* SafariExtensionSupport.swift in Sources */,
+				10000000000000000000000D /* TelegramCheckinFeatures.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -661,6 +673,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E10000000000000000000001 /* XCRemoteSwiftPackageReference "TDLibKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Swiftgram/TDLibKit";
+			requirement = {
+				kind = exactVersion;
+				version = "1.5.2-tdlib-1.8.68-c15d3f5a";
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E20000000000000000000002 /* TDLibKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000000000000000000001 /* XCRemoteSwiftPackageReference "TDLibKit" */;
+			productName = TDLibKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 600000000000000000000001 /* Project object */;
 }
