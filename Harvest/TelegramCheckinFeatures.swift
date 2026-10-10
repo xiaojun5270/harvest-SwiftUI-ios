@@ -198,6 +198,15 @@ struct TelegramCheckinStatistics: Codable, Equatable {
     }
 }
 
+struct TelegramDiscoveredBot: Identifiable, Equatable {
+    let userID: Int64
+    let chatID: Int64
+    let name: String
+    let username: String
+
+    var id: Int64 { userID }
+}
+
 @MainActor
 final class TelegramCheckinStore: ObservableObject {
     static let shared = TelegramCheckinStore()
@@ -585,6 +594,55 @@ final class TelegramSessionController: ObservableObject {
 
     func configureNotificationForwarding(_ appState: AppState) {
         notificationAppState = appState
+    }
+
+    func discoverBots() async throws -> [TelegramDiscoveredBot] {
+        guard isReady, let client else { throw TelegramCheckinError.notAuthorized }
+        let lists: [ChatList] = [.chatListMain, .chatListArchive]
+        var chatIDs = Set<Int64>()
+        for list in lists {
+            for _ in 0..<3 {
+                do {
+                    _ = try await client.loadChats(chatList: list, limit: 100)
+                } catch {
+                    break
+                }
+            }
+            if let chats = try? await client.getChats(chatList: list, limit: 200) {
+                chatIDs.formUnion(chats.chatIds)
+            }
+        }
+
+        var discovered: [TelegramDiscoveredBot] = []
+        for chatID in chatIDs {
+            guard let chat = try? await client.getChat(chatId: chatID),
+                  case .chatTypePrivate(let privateChat) = chat.type,
+                  let user = try? await client.getUser(userId: privateChat.userId),
+                  case .userTypeBot(_) = user.type else { continue }
+            let usernames = user.usernames
+            let normalizedUsername = (
+                (usernames?.activeUsernames ?? [])
+                    + [usernames?.editableUsername ?? "", usernames?.secondaryUsername ?? ""]
+            )
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? ""
+            guard !normalizedUsername.isEmpty else { continue }
+            let fullName = [user.firstName, user.lastName]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            discovered.append(
+                TelegramDiscoveredBot(
+                    userID: user.id,
+                    chatID: chat.id,
+                    name: fullName.isEmpty ? chat.title : fullName,
+                    username: normalizedUsername
+                )
+            )
+        }
+        return discovered.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
 
     @discardableResult
@@ -1296,6 +1354,7 @@ struct TelegramBotsPanel: View {
 
     @State private var showAccount = false
     @State private var showAdd = false
+    @State private var showDiscovery = false
     @State private var editingBot: TelegramCheckinBot?
     @State private var historyBot: TelegramCheckinBot?
     @State private var deletingBot: TelegramCheckinBot?
@@ -1303,7 +1362,6 @@ struct TelegramBotsPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             accountStrip
-            TelegramCumulativeStatsPanel(statistics: store.statistics)
             if store.bots.isEmpty {
                 EmptyState(
                     icon: "paperplane.circle",
@@ -1384,6 +1442,10 @@ struct TelegramBotsPanel: View {
             TelegramBotEditorSheet(bot: TelegramCheckinBot()) { store.saveBot($0) }
                 .presentationDetents([.large])
         }
+        .sheet(isPresented: $showDiscovery) {
+            TelegramBotDiscoverySheet(controller: controller, store: store)
+                .presentationDetents([.large])
+        }
         .sheet(item: $editingBot) { bot in
             TelegramBotEditorSheet(bot: bot) { store.saveBot($0) }
                 .presentationDetents([.large])
@@ -1437,7 +1499,15 @@ struct TelegramBotsPanel: View {
             .buttonBorderShape(.circle)
             .controlSize(.small)
             .accessibilityLabel("Telegram 账号")
-            Button { showAdd = true } label: {
+            Menu {
+                Button { showAdd = true } label: {
+                    Label("手动添加", systemImage: "square.and.pencil")
+                }
+                Button { showDiscovery = true } label: {
+                    Label("自动识别 Bot", systemImage: "magnifyingglass.circle")
+                }
+                .disabled(!controller.isReady)
+            } label: {
                 Image(systemName: "plus")
                     .frame(width: 28, height: 28)
             }
@@ -1493,70 +1563,152 @@ struct TelegramBotsPanel: View {
     }
 }
 
-private struct TelegramCumulativeStatsPanel: View {
-    let statistics: TelegramCheckinStatistics
+private struct TelegramBotDiscoverySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var controller: TelegramSessionController
+    @ObservedObject var store: TelegramCheckinStore
 
-    private var counter: TelegramCheckinCounter { statistics.overall }
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    @State private var bots: [TelegramDiscoveredBot] = []
+    @State private var selectedIDs: Set<Int64> = []
+    @State private var query = ""
+    @State private var isLoading = true
+    @State private var errorMessage: String?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: "chart.bar.xaxis")
-                    .foregroundStyle(HarvestTheme.blue)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("累计数据")
-                        .font(.subheadline.weight(.semibold))
-                    Text("\(counter.runs) 次执行 · \(counter.attempts) 次尝试")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("成功率 \(Int((counter.successRate * 100).rounded()))%")
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(counter.successes > 0 ? HarvestTheme.green : Color.secondary)
-            }
-
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.secondary.opacity(0.12))
-                    Capsule()
-                        .fill(HarvestTheme.green)
-                        .frame(width: proxy.size.width * counter.successRate)
-                }
-            }
-            .frame(height: 4)
-
-            LazyVGrid(columns: columns, spacing: 7) {
-                metric("成功", value: counter.successes, icon: "checkmark.seal.fill", color: HarvestTheme.green)
-                metric("失败", value: counter.failures, icon: "xmark.octagon.fill", color: HarvestTheme.coral)
-                metric("超时", value: counter.timeouts, icon: "hourglass", color: HarvestTheme.orange)
-                metric("待确认", value: counter.unmatched, icon: "questionmark.bubble.fill", color: HarvestTheme.amber)
-                metric("手动", value: counter.manualRuns, icon: "hand.tap.fill", color: HarvestTheme.indigo)
-                metric("定时", value: counter.scheduledRuns, icon: "calendar.badge.clock", color: HarvestTheme.purple)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .overlay(alignment: .bottom) { Divider() }
+    private var configuredUsernames: Set<String> {
+        Set(store.bots.map { $0.normalizedUsername.lowercased() })
     }
 
-    private func metric(_ label: String, value: Int, icon: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.caption2)
-                .foregroundStyle(color)
-                .frame(width: 13)
-            Text(label)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 2)
-            Text("\(value)")
-                .fontWeight(.semibold)
-                .monospacedDigit()
-                .foregroundStyle(.primary)
+    private var filteredBots: [TelegramDiscoveredBot] {
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return bots }
+        return bots.filter {
+            $0.name.localizedCaseInsensitiveContains(value)
+                || $0.username.localizedCaseInsensitiveContains(value)
         }
-        .font(.caption2)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large)
+                        Text("正在读取 Telegram Bot")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let errorMessage {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title)
+                            .foregroundStyle(HarvestTheme.coral)
+                        Text(errorMessage)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("重新识别") { Task { await load() } }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if filteredBots.isEmpty {
+                    ContentUnavailableView(
+                        query.isEmpty ? "未识别到 Bot" : "没有匹配 Bot",
+                        systemImage: "magnifyingglass"
+                    )
+                } else {
+                    List(filteredBots) { bot in
+                        Button { toggle(bot) } label: {
+                            HStack(spacing: 11) {
+                                ZStack {
+                                    Circle().fill(HarvestTheme.blue.opacity(0.12))
+                                    Image(systemName: "paperplane.fill")
+                                        .foregroundStyle(HarvestTheme.blue)
+                                }
+                                .frame(width: 38, height: 38)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(bot.name)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Text("@\(bot.username)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if isConfigured(bot) {
+                                    Text("已添加")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Image(systemName: selectedIDs.contains(bot.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.title3)
+                                        .foregroundStyle(selectedIDs.contains(bot.id) ? HarvestTheme.blue : Color.secondary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isConfigured(bot))
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .searchable(text: $query, prompt: "搜索 Bot")
+            .navigationTitle("自动识别 Bot")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .confirmationAction) {
+                    Button { Task { await load() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(isLoading)
+                    .accessibilityLabel("重新识别")
+                    Button("添加 \(selectedIDs.count)") { addSelected() }
+                        .disabled(selectedIDs.isEmpty)
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private func isConfigured(_ bot: TelegramDiscoveredBot) -> Bool {
+        configuredUsernames.contains(bot.username.lowercased())
+    }
+
+    private func toggle(_ bot: TelegramDiscoveredBot) {
+        guard !isConfigured(bot) else { return }
+        if selectedIDs.contains(bot.id) { selectedIDs.remove(bot.id) }
+        else { selectedIDs.insert(bot.id) }
+    }
+
+    private func load() async {
+        guard !isLoading || bots.isEmpty else { return }
+        isLoading = true
+        errorMessage = nil
+        do {
+            bots = try await controller.discoverBots()
+            selectedIDs = selectedIDs.intersection(Set(bots.map(\.id)))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    private func addSelected() {
+        for item in bots where selectedIDs.contains(item.id) && !isConfigured(item) {
+            var bot = TelegramCheckinBot()
+            bot.name = item.name
+            bot.username = item.username
+            bot.resolvedChatID = item.chatID
+            bot.resolvedTitle = item.name
+            store.saveBot(bot)
+        }
+        dismiss()
     }
 }
 
@@ -1617,6 +1769,8 @@ private struct TelegramBotCard: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
 
+            botStatistics
+
             if !bot.lastResponse.isEmpty {
                 Text(bot.lastResponse)
                     .font(.subheadline)
@@ -1635,12 +1789,6 @@ private struct TelegramBotCard: View {
                     Text("暂无执行记录")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                }
-                if statistics.runs > 0 {
-                    Label("\(statistics.successes)/\(statistics.runs)", systemImage: "chart.bar.fill")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(HarvestTheme.green)
-                        .accessibilityLabel("累计成功 \(statistics.successes) 次，共执行 \(statistics.runs) 次")
                 }
                 Spacer(minLength: 4)
                 Button(action: onHistory) {
@@ -1672,6 +1820,42 @@ private struct TelegramBotCard: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 2)
+    }
+
+    private var botStatistics: some View {
+        HStack(spacing: 0) {
+            botMetric("执行", value: "\(statistics.runs)", color: HarvestTheme.blue)
+            Divider().frame(height: 25)
+            botMetric("成功", value: "\(statistics.successes)", color: HarvestTheme.green)
+            Divider().frame(height: 25)
+            botMetric(
+                "失败",
+                value: "\(statistics.failures + statistics.timeouts)",
+                color: HarvestTheme.coral
+            )
+            Divider().frame(height: 25)
+            botMetric(
+                "成功率",
+                value: "\(Int((statistics.successRate * 100).rounded()))%",
+                color: statistics.successes > 0 ? HarvestTheme.green : Color.secondary
+            )
+        }
+        .padding(.vertical, 5)
+        .overlay(alignment: .top) { Divider().opacity(0.65) }
+        .overlay(alignment: .bottom) { Divider().opacity(0.65) }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func botMetric(_ label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(color)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

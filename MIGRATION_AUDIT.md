@@ -41,9 +41,13 @@ pass, and device testing against a reachable Harvest server.
   commands are never repeated. Successful and already-completed check-in replies
   are forwarded once through the backend's configured `wechat_work_push` channel;
   notification delivery errors are logged without changing the check-in result.
-  A separately persisted cumulative counter now feeds the Telegram summary panel
-  and per-Bot cards, retaining totals beyond the capped execution-history list and
-  migrating existing snapshots by deriving their initial counters from history.
+  Separately persisted counters now feed compact metrics inside each Bot card,
+  retaining per-Bot totals beyond the capped execution-history list and migrating
+  existing snapshots by deriving their initial counters from history. No global
+  cumulative panel is shown above the Bot list.
+  Bot setup can also discover private Bot accounts from the loaded Telegram main
+  and archive chat lists, with searchable multi-selection, duplicate detection,
+  and cached chat identifiers; manual creation remains available.
 
 - An iOS-only Telegram check-in workflow was added without extending the Harvest
   backend contract. The Sites screen now includes a Telegram Bot card list with
