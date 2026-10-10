@@ -1295,14 +1295,16 @@ private struct TelegramBotEditorSheet: View {
                     Toggle("启用", isOn: $draft.isEnabled)
                 }
 
-                Section("结果判断") {
+                Section {
                     TextField("成功关键词，用逗号分隔", text: $successKeywords)
                     TextField("失败关键词，用逗号分隔", text: $failureKeywords)
+                } header: {
+                    Text("结果判断")
                 } footer: {
                     Text("未填写成功关键词时，收到任意回复即记为成功；失败关键词优先。")
                 }
 
-                Section("定时签到") {
+                Section {
                     Toggle("启用定时", isOn: $draft.scheduleEnabled)
                     if draft.scheduleEnabled {
                         DatePicker("执行时间", selection: scheduleDate, displayedComponents: .hourAndMinute)
@@ -1328,6 +1330,8 @@ private struct TelegramBotEditorSheet: View {
                             }
                         }
                     }
+                } header: {
+                    Text("定时签到")
                 } footer: {
                     Text("定时任务在 App 前台运行；iOS 挂起或终止 App 后不能保证准时执行。")
                 }

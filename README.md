@@ -22,6 +22,8 @@ the same bundle identifier side by side.
 - 修复接入 TDLibKit 后其 `Date` 模型与 Foundation 日期类型同名导致的 Swift
   编译失败；Telegram 签到配置、执行记录、回复匹配与定时设置统一显式使用
   `Foundation.Date`，恢复无证书 IPA 构建。
+- 修复 TG Bot 编辑页带标题和页脚的 SwiftUI `Section` 初始化方式不兼容造成的
+  泛型推断失败，结果判断与定时签到分组改用显式标题和页脚构造。
 - 新增完全运行在 iOS 本机的 Telegram Bot 签到模块，不改 Harvest 后端：站点页
   增加“站点 / TG 签到”分段，支持添加、编辑、停用、删除 Bot，手动或批量发送
   签到命令，并按成功/失败关键词判断回复、记录耗时与完整执行历史。
