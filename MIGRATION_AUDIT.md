@@ -9,7 +9,7 @@ UI/service call sites.
 
 This audit maps the active Flutter mobile workflows to native iOS screens and
 service calls. It is a living source-level checklist, not a certification that
-the two clients are already identical at runtime. The native target declares 93
+the two clients are already identical at runtime. The native target declares 87
 `APIPath` entries and currently references 86 of them, including all three
 first-run setup endpoints.
 Flutter constants not mirrored as product screens are interceptor-only auth
@@ -20,6 +20,30 @@ An authoritative 1:1 result still requires an Xcode 26 build, API integration
 pass, and device testing against a reachable Harvest server.
 
 ## Latest Corrections
+
+- The Flutter delta from `96268b5e` through release `afd4be55` was reviewed.
+  Its cross-platform product change adds the Douban now-playing endpoint, model,
+  cache provider, and first-page section. Native iOS now exposes
+  `/api/option/douban/now_playing` as the first Douban collection, parses its nested
+  cover/rating/subtitle/line-watch fields through the shared media model, and uses
+  the existing concurrent cache-first catalog loader and detail workflow. Flutter's
+  Material dependency removal and Web-only fetch SSE split do not apply to native
+  SwiftUI/URLSession. App and both Safari extension targets are synchronized to
+  `2026.1009.01+297`.
+
+- Telegram check-in Bot definitions now support ordered multi-command workflows
+  and configurable panel-button matching. Incoming TDLib reply keyboards are
+  handled by sending the selected button text, while inline callback keyboards
+  submit their callback payload and wait for the final Bot response. Legacy
+  single-command records remain readable; password, Web App, payment, and other
+  unsafe interactive button types are reported instead of being activated.
+  Retries now apply only to the command that timed out or failed, so completed
+  commands are never repeated. Successful and already-completed check-in replies
+  are forwarded once through the backend's configured `wechat_work_push` channel;
+  notification delivery errors are logged without changing the check-in result.
+  A separately persisted cumulative counter now feeds the Telegram summary panel
+  and per-Bot cards, retaining totals beyond the capped execution-history list and
+  migrating existing snapshots by deriving their initial counters from history.
 
 - An iOS-only Telegram check-in workflow was added without extending the Harvest
   backend contract. The Sites screen now includes a Telegram Bot card list with

@@ -61,8 +61,11 @@ struct TelegramCheckinBot: Codable, Identifiable, Equatable {
     var name = ""
     var username = ""
     var command = "/checkin"
+    var additionalCommands: [String]?
     var successKeywords: [String] = []
     var failureKeywords: [String] = []
+    var automaticallyPressPanelButton: Bool?
+    var panelButtonKeywords: [String]?
     var isEnabled = true
     var scheduleEnabled = false
     var scheduleMinute = 8 * 60
@@ -79,6 +82,22 @@ struct TelegramCheckinBot: Codable, Identifiable, Equatable {
     var displayName: String {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? normalizedUsername : value
+    }
+
+    var commands: [String] {
+        var seen = Set<String>()
+        return ([command] + (additionalCommands ?? []))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    var pressesPanelButton: Bool { automaticallyPressPanelButton ?? true }
+
+    var effectivePanelButtonKeywords: [String] {
+        let values = (panelButtonKeywords ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return values.isEmpty ? ["签到"] : values
     }
 
     var normalizedUsername: String {
@@ -129,16 +148,68 @@ struct TelegramCheckinHistory: Codable, Identifiable, Equatable {
     let attemptCount: Int
 }
 
+struct TelegramCheckinCounter: Codable, Equatable {
+    var runs = 0
+    var attempts = 0
+    var successes = 0
+    var failures = 0
+    var timeouts = 0
+    var unmatched = 0
+    var manualRuns = 0
+    var scheduledRuns = 0
+
+    var successRate: Double {
+        guard runs > 0 else { return 0 }
+        return Double(successes) / Double(runs)
+    }
+
+    mutating func include(_ record: TelegramCheckinHistory) {
+        runs += 1
+        attempts += max(1, record.attemptCount)
+        switch record.status {
+        case .success: successes += 1
+        case .failure: failures += 1
+        case .timeout: timeouts += 1
+        case .unmatched: unmatched += 1
+        case .idle, .running: break
+        }
+        switch record.trigger {
+        case .manual: manualRuns += 1
+        case .scheduled: scheduledRuns += 1
+        }
+    }
+}
+
+struct TelegramCheckinStatistics: Codable, Equatable {
+    var overall = TelegramCheckinCounter()
+    var bots: [String: TelegramCheckinCounter] = [:]
+    var lastUpdatedAt: Foundation.Date?
+
+    mutating func include(_ record: TelegramCheckinHistory) {
+        overall.include(record)
+        var counter = bots[record.botID.uuidString] ?? TelegramCheckinCounter()
+        counter.include(record)
+        bots[record.botID.uuidString] = counter
+        lastUpdatedAt = record.createdAt
+    }
+
+    func counter(for botID: UUID) -> TelegramCheckinCounter {
+        bots[botID.uuidString] ?? TelegramCheckinCounter()
+    }
+}
+
 @MainActor
 final class TelegramCheckinStore: ObservableObject {
     static let shared = TelegramCheckinStore()
 
     @Published private(set) var bots: [TelegramCheckinBot] = []
     @Published private(set) var history: [TelegramCheckinHistory] = []
+    @Published private(set) var statistics = TelegramCheckinStatistics()
 
     private struct Snapshot: Codable {
         var bots: [TelegramCheckinBot]
         var history: [TelegramCheckinHistory]
+        var statistics: TelegramCheckinStatistics?
     }
 
     private let fileURL: URL?
@@ -161,7 +232,11 @@ final class TelegramCheckinStore: ObservableObject {
         var bot = value
         bot.name = bot.name.trimmingCharacters(in: .whitespacesAndNewlines)
         bot.username = bot.normalizedUsername
-        bot.command = bot.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let commands = bot.commands
+        bot.command = commands.first ?? "/checkin"
+        bot.additionalCommands = commands.count > 1 ? Array(commands.dropFirst()) : nil
+        let panelKeywords = bot.effectivePanelButtonKeywords
+        bot.panelButtonKeywords = panelKeywords
         bot.timeoutSeconds = max(5, min(120, bot.timeoutSeconds))
         bot.retryCount = max(0, min(3, bot.retryCount))
         bot.scheduleMinute = max(0, min(1_439, bot.scheduleMinute))
@@ -234,7 +309,7 @@ final class TelegramCheckinStore: ObservableObject {
             botID: id,
             botName: bot.displayName,
             username: bot.normalizedUsername,
-            command: bot.command,
+            command: bot.commands.joined(separator: " → "),
             trigger: trigger,
             status: status,
             response: response,
@@ -243,6 +318,7 @@ final class TelegramCheckinStore: ObservableObject {
             attemptCount: attempts
         )
         history.insert(record, at: 0)
+        statistics.include(record)
         if history.count > 300 { history.removeLast(history.count - 300) }
         persist()
         return record
@@ -250,6 +326,10 @@ final class TelegramCheckinStore: ObservableObject {
 
     func history(for botID: UUID) -> [TelegramCheckinHistory] {
         history.filter { $0.botID == botID }
+    }
+
+    func statistics(for botID: UUID) -> TelegramCheckinCounter {
+        statistics.counter(for: botID)
     }
 
     private func updateBot(
@@ -267,11 +347,21 @@ final class TelegramCheckinStore: ObservableObject {
               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         bots = snapshot.bots
         history = snapshot.history.sorted { $0.createdAt > $1.createdAt }
+        if let savedStatistics = snapshot.statistics {
+            statistics = savedStatistics
+        } else {
+            var migrated = TelegramCheckinStatistics()
+            for record in history.reversed() { migrated.include(record) }
+            statistics = migrated
+            persist()
+        }
     }
 
     private func persist() {
         guard let fileURL,
-              let data = try? JSONEncoder().encode(Snapshot(bots: bots, history: history)) else { return }
+              let data = try? JSONEncoder().encode(
+                Snapshot(bots: bots, history: history, statistics: statistics)
+              ) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }
 }
@@ -337,14 +427,24 @@ final class TelegramSessionController: ObservableObject {
     private struct PendingResponse {
         let chatID: Int64
         let afterMessageID: Int64
+        let acceptsSameMessageID: Bool
+        let baselineText: String?
+        let baselineReplyMarkup: ReplyMarkup?
         let startedAt: Foundation.Date
-        let continuation: CheckedContinuation<String?, Never>
+        let continuation: CheckedContinuation<RecentResponse?, Never>
     }
 
     private struct RecentResponse {
         let messageID: Int64
         let date: Foundation.Date
         let text: String
+        let replyMarkup: ReplyMarkup?
+    }
+
+    private enum PanelAction {
+        case sendText(title: String, text: String)
+        case callback(title: String, messageID: Int64, data: Foundation.Data)
+        case unsupported(title: String, reason: String)
     }
 
     private let manager: TDLibClientManager
@@ -354,6 +454,7 @@ final class TelegramSessionController: ObservableObject {
     private var schedulerTask: Task<Void, Never>?
     private var pendingResponses: [UUID: PendingResponse] = [:]
     private var recentResponses: [Int64: [RecentResponse]] = [:]
+    private weak var notificationAppState: AppState?
 
     var isReady: Bool { phase == .ready }
     var savedAPIID: String { KeychainStore.get(Self.apiIDKey) ?? "" }
@@ -482,6 +583,10 @@ final class TelegramSessionController: ObservableObject {
 
     func isRunning(_ id: UUID) -> Bool { runningBotIDs.contains(id) }
 
+    func configureNotificationForwarding(_ appState: AppState) {
+        notificationAppState = appState
+    }
+
     @discardableResult
     func run(botID: UUID, trigger: TelegramCheckinTrigger) async throws -> TelegramCheckinHistory {
         guard isReady, let client else { throw TelegramCheckinError.notAuthorized }
@@ -490,8 +595,8 @@ final class TelegramSessionController: ObservableObject {
         guard !bot.normalizedUsername.isEmpty else {
             throw TelegramCheckinError.invalidConfiguration("Bot 用户名不能为空")
         }
-        guard !bot.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw TelegramCheckinError.invalidConfiguration("签到命令不能为空")
+        guard !bot.commands.isEmpty else {
+            throw TelegramCheckinError.invalidConfiguration("至少需要一条签到命令")
         }
 
         let startedAt = Foundation.Date()
@@ -499,33 +604,22 @@ final class TelegramSessionController: ObservableObject {
         TelegramCheckinStore.shared.beginRun(id: botID)
         defer { runningBotIDs.remove(botID) }
 
-        var finalStatus: TelegramCheckinRunStatus = .failure
-        var finalResponse = "执行失败"
-        var attempts = 0
-
-        for attempt in 0...bot.retryCount {
-            attempts = attempt + 1
-            do {
-                bot = TelegramCheckinStore.shared.bot(id: botID) ?? bot
-                let result = try await executeOnce(bot: bot, client: client)
-                finalStatus = result.status
-                finalResponse = result.response
-                if result.status != .timeout || attempt == bot.retryCount { break }
-            } catch {
-                finalStatus = .failure
-                finalResponse = readableError(error)
-                TelegramCheckinStore.shared.clearResolvedChat(id: botID)
-                if attempt == bot.retryCount { break }
-            }
+        let result: (status: TelegramCheckinRunStatus, response: String, attempts: Int)
+        do {
+            bot = TelegramCheckinStore.shared.bot(id: botID) ?? bot
+            result = try await executeOnce(bot: bot, trigger: trigger, client: client)
+        } catch {
+            TelegramCheckinStore.shared.clearResolvedChat(id: botID)
+            result = (.failure, readableError(error), 1)
         }
 
         guard let record = TelegramCheckinStore.shared.finishRun(
             id: botID,
             trigger: trigger,
-            status: finalStatus,
-            response: finalResponse,
+            status: result.status,
+            response: result.response,
             startedAt: startedAt,
-            attempts: attempts
+            attempts: result.attempts
         ) else {
             throw TelegramCheckinError.botNotFound
         }
@@ -553,6 +647,10 @@ final class TelegramSessionController: ObservableObject {
             handleAuthorizationState(value.authorizationState)
         case .updateNewMessage(let value):
             handleIncomingMessage(value.message)
+        case .updateMessageContent(let value):
+            handleMessageContentUpdate(value)
+        case .updateMessageEdited(let value):
+            handleMessageEdited(value)
         default:
             break
         }
@@ -680,8 +778,12 @@ final class TelegramSessionController: ObservableObject {
         }
     }
 
-    private func executeOnce(bot: TelegramCheckinBot, client: TDLibClient) async throws -> (status: TelegramCheckinRunStatus, response: String) {
-        let chatID: Int64
+    private func executeOnce(
+        bot: TelegramCheckinBot,
+        trigger: TelegramCheckinTrigger,
+        client: TDLibClient
+    ) async throws -> (status: TelegramCheckinRunStatus, response: String, attempts: Int) {
+        var chatID: Int64
         if let cached = bot.resolvedChatID {
             chatID = cached
         } else {
@@ -690,24 +792,66 @@ final class TelegramSessionController: ObservableObject {
             TelegramCheckinStore.shared.cacheResolvedChat(id: bot.id, chatID: chat.id, title: chat.title)
         }
 
-        let startedAt = Foundation.Date()
-        let content = InputMessageContent.inputMessageText(
-            InputMessageText(
-                clearDraft: true,
-                linkPreviewOptions: nil,
-                text: FormattedText(entities: [], text: bot.command)
+        guard !bot.commands.isEmpty else {
+            throw TelegramCheckinError.invalidConfiguration("至少需要一条签到命令")
+        }
+        var status = TelegramCheckinRunStatus.success
+        var responses: [String] = []
+        var totalAttempts = 0
+        for command in bot.commands {
+            var commandResult: (status: TelegramCheckinRunStatus, response: String)?
+            for attempt in 0...bot.retryCount {
+                totalAttempts += 1
+                do {
+                    let current = try await executeCommand(command, bot: bot, chatID: chatID, client: client)
+                    commandResult = current
+                    if current.status != .timeout || attempt == bot.retryCount { break }
+                } catch {
+                    if attempt == bot.retryCount {
+                        commandResult = (.failure, readableError(error))
+                        break
+                    }
+                    let chat = try await client.searchPublicChat(username: bot.normalizedUsername)
+                    chatID = chat.id
+                    TelegramCheckinStore.shared.cacheResolvedChat(
+                        id: bot.id,
+                        chatID: chat.id,
+                        title: chat.title
+                    )
+                }
+            }
+            guard let commandResult else {
+                return (.failure, "命令 \(command) 执行失败", totalAttempts)
+            }
+            responses.append(
+                bot.commands.count > 1 ? "\(command)：\(commandResult.response)" : commandResult.response
             )
-        )
+            if commandResult.status == .failure || commandResult.status == .timeout {
+                return (commandResult.status, responses.joined(separator: "\n"), totalAttempts)
+            }
+            if commandResult.status == .success {
+                await forwardSuccessfulCheckin(
+                    bot: bot,
+                    command: command,
+                    response: commandResult.response,
+                    trigger: trigger
+                )
+            }
+            if commandResult.status == .unmatched { status = .unmatched }
+        }
+        return (status, responses.joined(separator: "\n"), totalAttempts)
+    }
+
+    private func executeCommand(
+        _ command: String,
+        bot: TelegramCheckinBot,
+        chatID: Int64,
+        client: TDLibClient
+    ) async throws -> (status: TelegramCheckinRunStatus, response: String) {
+        let startedAt = Foundation.Date()
         let sentMessage: Message
         do {
-            sentMessage = try await client.sendMessage(
-                chatId: chatID,
-                inputMessageContent: content,
-                options: nil,
-                replyMarkup: nil,
-                replyTo: nil,
-                topicId: nil
-            )
+            sentMessage = try await sendText(command, chatID: chatID, client: client)
         } catch {
             if bot.resolvedChatID != nil {
                 TelegramCheckinStore.shared.clearResolvedChat(id: bot.id)
@@ -715,7 +859,7 @@ final class TelegramSessionController: ObservableObject {
             throw error
         }
 
-        guard let response = await waitForResponse(
+        guard var response = await waitForResponse(
             chatID: chatID,
             afterMessageID: sentMessage.id,
             startedAt: startedAt,
@@ -723,9 +867,55 @@ final class TelegramSessionController: ObservableObject {
         ) else {
             return (.timeout, "等待 Bot 回复超时")
         }
+
+        if responseMatchesFailure(response.text, bot: bot) {
+            return (.failure, response.text)
+        }
+        if responseMatchesExplicitSuccess(response.text, bot: bot) {
+            return (.success, response.text)
+        }
+        if bot.pressesPanelButton, response.replyMarkup != nil {
+            guard let action = panelAction(
+                from: response,
+                keywords: bot.effectivePanelButtonKeywords
+            ) else {
+                return (
+                    .failure,
+                    "未找到面板按钮：\(bot.effectivePanelButtonKeywords.joined(separator: "、"))"
+                )
+            }
+            switch action {
+            case .unsupported(let title, let reason):
+                return (.failure, "无法点击「\(title)」：\(reason)")
+            case .sendText, .callback:
+                guard let panelResponse = try await performPanelAction(
+                    action,
+                    panelResponse: response,
+                    chatID: chatID,
+                    timeoutSeconds: bot.timeoutSeconds,
+                    client: client
+                ) else {
+                    return (.timeout, "已点击面板按钮，但等待 Bot 最终回复超时")
+                }
+                response = panelResponse
+            }
+        }
+        if response.text.hasPrefix("已点击面板按钮「") {
+            return (.unmatched, response.text)
+        }
+        return evaluatedResult(response.text, bot: bot)
+    }
+
+    private func evaluatedResult(
+        _ response: String,
+        bot: TelegramCheckinBot
+    ) -> (status: TelegramCheckinRunStatus, response: String) {
         let normalized = response.lowercased()
-        if bot.failureKeywords.contains(where: { normalized.contains($0.lowercased()) }) {
+        if responseMatchesFailure(response, bot: bot) {
             return (.failure, response)
+        }
+        if responseMatchesExplicitSuccess(response, bot: bot) {
+            return (.success, response)
         }
         if bot.successKeywords.isEmpty || bot.successKeywords.contains(where: { normalized.contains($0.lowercased()) }) {
             return (.success, response)
@@ -733,70 +923,327 @@ final class TelegramSessionController: ObservableObject {
         return (.unmatched, response)
     }
 
+    private func responseMatchesFailure(_ response: String, bot: TelegramCheckinBot) -> Bool {
+        let normalized = response.lowercased()
+        if bot.failureKeywords.contains(where: { normalized.contains($0.lowercased()) }) {
+            return true
+        }
+        return ["签到失败", "操作失败", "验证失败", "未能签到", "check-in failed"]
+            .contains { normalized.contains($0) }
+    }
+
+    private func responseMatchesExplicitSuccess(_ response: String, bot: TelegramCheckinBot) -> Bool {
+        let normalized = response.lowercased()
+        if !bot.successKeywords.isEmpty,
+           bot.successKeywords.contains(where: { normalized.contains($0.lowercased()) }) {
+            return true
+        }
+        return [
+            "签到成功", "已签到", "已经签到", "今日已签", "签到完成", "打卡成功",
+            "already checked in", "check-in successful", "checked in successfully"
+        ].contains { normalized.contains($0) }
+    }
+
+    private func forwardSuccessfulCheckin(
+        bot: TelegramCheckinBot,
+        command: String,
+        response: String,
+        trigger: TelegramCheckinTrigger
+    ) async {
+        guard let appState = await authenticatedNotificationAppState() else {
+            recordAppLog(.warning, "TG 签到成功，但 Harvest 会话不可用，未转发企业微信")
+            return
+        }
+        let responseText = String(response.prefix(800))
+        let content = """
+        Bot：\(bot.displayName)（@\(bot.normalizedUsername)）
+        命令：\(command)
+        结果：\(responseText)
+        方式：\(trigger.label)
+        时间：\(Foundation.Date().formatted(date: .abbreviated, time: .standard))
+        """
+        do {
+            _ = try await appState.api(
+                APIPath.notifyTest,
+                method: .get,
+                query: [
+                    "title": "TG Bot 签到成功",
+                    "content": content,
+                    "push_type": "wechat_work_push"
+                ],
+                timeoutInterval: 15
+            )
+            recordAppLog(.info, "TG 签到成功消息已转发企业微信：\(bot.displayName)")
+        } catch {
+            recordAppLog(.warning, "TG 签到成功消息转发企业微信失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func authenticatedNotificationAppState() async -> AppState? {
+        for _ in 0..<12 {
+            if let appState = notificationAppState, appState.isAuthenticated { return appState }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return nil
+    }
+
+    private func sendText(_ text: String, chatID: Int64, client: TDLibClient) async throws -> Message {
+        let content = InputMessageContent.inputMessageText(
+            InputMessageText(
+                clearDraft: true,
+                linkPreviewOptions: nil,
+                text: FormattedText(entities: [], text: text)
+            )
+        )
+        return try await client.sendMessage(
+            chatId: chatID,
+            inputMessageContent: content,
+            options: nil,
+            replyMarkup: nil,
+            replyTo: nil,
+            topicId: nil
+        )
+    }
+
+    private func panelAction(from response: RecentResponse, keywords: [String]) -> PanelAction? {
+        guard let replyMarkup = response.replyMarkup else { return nil }
+        switch replyMarkup {
+        case .replyMarkupInlineKeyboard(let keyboard):
+            for button in keyboard.rows.flatMap({ $0 }) where buttonMatches(button.text, keywords: keywords) {
+                switch button.type {
+                case .inlineKeyboardButtonTypeCallback(let callback):
+                    return .callback(title: button.text, messageID: response.messageID, data: callback.data)
+                case .inlineKeyboardButtonTypeCallbackWithPassword:
+                    return .unsupported(title: button.text, reason: "该按钮需要再次输入 Telegram 两步验证密码")
+                default:
+                    return .unsupported(title: button.text, reason: "该按钮不是可自动执行的签到回调")
+                }
+            }
+        case .replyMarkupShowKeyboard(let keyboard):
+            for button in keyboard.rows.flatMap({ $0 }) where buttonMatches(button.text, keywords: keywords) {
+                switch button.type {
+                case .keyboardButtonTypeText:
+                    return .sendText(title: button.text, text: button.text)
+                default:
+                    return .unsupported(title: button.text, reason: "该按钮需要人工提供额外信息")
+                }
+            }
+        default:
+            break
+        }
+        return nil
+    }
+
+    private func buttonMatches(_ title: String, keywords: [String]) -> Bool {
+        keywords.contains { title.localizedCaseInsensitiveContains($0) }
+    }
+
+    private func performPanelAction(
+        _ action: PanelAction,
+        panelResponse: RecentResponse,
+        chatID: Int64,
+        timeoutSeconds: Int,
+        client: TDLibClient
+    ) async throws -> RecentResponse? {
+        switch action {
+        case .unsupported:
+            return nil
+        case .sendText(_, let text):
+            let sent = try await sendText(text, chatID: chatID, client: client)
+            return await waitForResponse(
+                chatID: chatID,
+                afterMessageID: sent.id,
+                startedAt: Foundation.Date(),
+                timeoutSeconds: timeoutSeconds
+            )
+        case .callback(let title, let messageID, let data):
+            let answer = try await client.getCallbackQueryAnswer(
+                chatId: chatID,
+                messageId: messageID,
+                payload: .callbackQueryPayloadData(CallbackQueryPayloadData(data: data))
+            )
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            if let latest = latestResponse(
+                chatID: chatID,
+                afterMessageID: messageID,
+                acceptsSameMessageID: true,
+                baseline: panelResponse,
+                startedAt: panelResponse.date
+            ) {
+                return latest
+            }
+            if let refreshed = try? await client.getMessage(chatId: chatID, messageId: messageID),
+               let updated = incomingResponse(for: refreshed),
+               updated.text != panelResponse.text || updated.replyMarkup != panelResponse.replyMarkup {
+                return updated
+            }
+            let answerText = answer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !answerText.isEmpty {
+                return RecentResponse(
+                    messageID: messageID,
+                    date: Foundation.Date(),
+                    text: answerText,
+                    replyMarkup: nil
+                )
+            }
+            if let response = await waitForResponse(
+                chatID: chatID,
+                afterMessageID: messageID,
+                acceptsSameMessageID: true,
+                baseline: panelResponse,
+                startedAt: Foundation.Date(),
+                timeoutSeconds: timeoutSeconds
+            ) {
+                return response
+            }
+            return RecentResponse(
+                messageID: messageID,
+                date: Foundation.Date(),
+                text: "已点击面板按钮「\(title)」",
+                replyMarkup: nil
+            )
+        }
+    }
+
     private func handleIncomingMessage(_ message: Message) {
         guard !message.isOutgoing else { return }
-        let text: String
-        switch message.content {
-        case .messageText(let value):
-            text = value.text.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .messagePhoto(let value):
-            text = value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .messageAnimation(let value):
-            text = value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .messageAudio(let value):
-            text = value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .messageDocument(let value):
-            text = value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .messageVideo(let value):
-            text = value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        default:
-            text = "已收到 Bot 回复"
-        }
-        let response = text.isEmpty ? "已收到 Bot 回复" : text
-        let receivedAt = Foundation.Date(timeIntervalSince1970: TimeInterval(message.date))
-        var recent = recentResponses[message.chatId] ?? []
-        recent.append(RecentResponse(messageID: message.id, date: receivedAt, text: response))
-        recentResponses[message.chatId] = Array(recent.suffix(12))
+        guard let response = incomingResponse(for: message) else { return }
+        recordResponse(response, chatID: message.chatId)
+    }
+
+    private func handleMessageContentUpdate(_ update: UpdateMessageContent) {
+        guard let previous = recentResponses[update.chatId]?.last(where: { $0.messageID == update.messageId }) else { return }
+        let text = messageText(from: update.newContent)
+        let normalizedText = text.isEmpty ? "已收到 Bot 回复" : text
+        guard normalizedText != previous.text else { return }
+        recordResponse(
+            RecentResponse(
+                messageID: update.messageId,
+                date: Foundation.Date(),
+                text: normalizedText,
+                replyMarkup: previous.replyMarkup
+            ),
+            chatID: update.chatId
+        )
+    }
+
+    private func handleMessageEdited(_ update: UpdateMessageEdited) {
+        guard let previous = recentResponses[update.chatId]?.last(where: { $0.messageID == update.messageId }),
+              previous.replyMarkup != update.replyMarkup else { return }
+        recordResponse(
+            RecentResponse(
+                messageID: update.messageId,
+                date: Foundation.Date(),
+                text: previous.text,
+                replyMarkup: update.replyMarkup
+            ),
+            chatID: update.chatId
+        )
+    }
+
+    private func recordResponse(_ response: RecentResponse, chatID: Int64) {
+        var recent = recentResponses[chatID] ?? []
+        recent.append(response)
+        recentResponses[chatID] = Array(recent.suffix(20))
 
         guard let match = pendingResponses
             .filter({
-                $0.value.chatID == message.chatId
-                    && message.id > $0.value.afterMessageID
-                    && receivedAt >= $0.value.startedAt.addingTimeInterval(-2)
+                $0.value.chatID == chatID
+                    && (response.messageID > $0.value.afterMessageID
+                        || ($0.value.acceptsSameMessageID
+                            && response.messageID == $0.value.afterMessageID
+                            && (response.text != $0.value.baselineText
+                                || response.replyMarkup != $0.value.baselineReplyMarkup)))
+                    && response.date >= $0.value.startedAt.addingTimeInterval(-2)
             })
             .min(by: { $0.value.startedAt < $1.value.startedAt }) else { return }
-        finishPendingResponse(id: match.key, text: response)
+        finishPendingResponse(id: match.key, response: response)
+    }
+
+    private func incomingResponse(for message: Message) -> RecentResponse? {
+        guard !message.isOutgoing else { return nil }
+        let text = messageText(from: message.content)
+        return RecentResponse(
+            messageID: message.id,
+            date: Foundation.Date(timeIntervalSince1970: TimeInterval(message.date)),
+            text: text.isEmpty ? "已收到 Bot 回复" : text,
+            replyMarkup: message.replyMarkup
+        )
+    }
+
+    private func messageText(from content: MessageContent) -> String {
+        switch content {
+        case .messageText(let value):
+            return value.text.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .messagePhoto(let value):
+            return value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .messageAnimation(let value):
+            return value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .messageAudio(let value):
+            return value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .messageDocument(let value):
+            return value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .messageVideo(let value):
+            return value.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        default:
+            return "已收到 Bot 回复"
+        }
     }
 
     private func waitForResponse(
         chatID: Int64,
         afterMessageID: Int64,
+        acceptsSameMessageID: Bool = false,
+        baseline: RecentResponse? = nil,
         startedAt: Foundation.Date,
         timeoutSeconds: Int
-    ) async -> String? {
-        if let recent = recentResponses[chatID]?.last(where: {
-            $0.messageID > afterMessageID && $0.date >= startedAt.addingTimeInterval(-2)
-        }) {
-            return recent.text
+    ) async -> RecentResponse? {
+        if let recent = latestResponse(
+            chatID: chatID,
+            afterMessageID: afterMessageID,
+            acceptsSameMessageID: acceptsSameMessageID,
+            baseline: baseline,
+            startedAt: startedAt
+        ) {
+            return recent
         }
         let pendingID = UUID()
         return await withCheckedContinuation { continuation in
             pendingResponses[pendingID] = PendingResponse(
                 chatID: chatID,
                 afterMessageID: afterMessageID,
+                acceptsSameMessageID: acceptsSameMessageID,
+                baselineText: baseline?.text,
+                baselineReplyMarkup: baseline?.replyMarkup,
                 startedAt: startedAt,
                 continuation: continuation
             )
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(max(5, timeoutSeconds)) * 1_000_000_000)
-                self?.finishPendingResponse(id: pendingID, text: nil)
+                self?.finishPendingResponse(id: pendingID, response: nil)
             }
         }
     }
 
-    private func finishPendingResponse(id: UUID, text: String?) {
+    private func latestResponse(
+        chatID: Int64,
+        afterMessageID: Int64,
+        acceptsSameMessageID: Bool = false,
+        baseline: RecentResponse? = nil,
+        startedAt: Foundation.Date
+    ) -> RecentResponse? {
+        recentResponses[chatID]?.last(where: {
+            ($0.messageID > afterMessageID
+                || (acceptsSameMessageID
+                    && $0.messageID == afterMessageID
+                    && ($0.text != baseline?.text || $0.replyMarkup != baseline?.replyMarkup)))
+                && $0.date >= startedAt.addingTimeInterval(-2)
+        })
+    }
+
+    private func finishPendingResponse(id: UUID, response: RecentResponse?) {
         guard let pending = pendingResponses.removeValue(forKey: id) else { return }
-        pending.continuation.resume(returning: text)
+        pending.continuation.resume(returning: response)
     }
 
     private func startScheduler() {
@@ -856,6 +1303,7 @@ struct TelegramBotsPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             accountStrip
+            TelegramCumulativeStatsPanel(statistics: store.statistics)
             if store.bots.isEmpty {
                 EmptyState(
                     icon: "paperplane.circle",
@@ -871,6 +1319,7 @@ struct TelegramBotsPanel: View {
                     ForEach(store.bots) { bot in
                         TelegramBotCard(
                             bot: bot,
+                            statistics: store.statistics(for: bot.id),
                             canRun: controller.isReady,
                             isRunning: controller.isRunning(bot.id),
                             onRun: { Task { await run(bot) } },
@@ -1044,8 +1493,76 @@ struct TelegramBotsPanel: View {
     }
 }
 
+private struct TelegramCumulativeStatsPanel: View {
+    let statistics: TelegramCheckinStatistics
+
+    private var counter: TelegramCheckinCounter { statistics.overall }
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "chart.bar.xaxis")
+                    .foregroundStyle(HarvestTheme.blue)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("累计数据")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(counter.runs) 次执行 · \(counter.attempts) 次尝试")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("成功率 \(Int((counter.successRate * 100).rounded()))%")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(counter.successes > 0 ? HarvestTheme.green : Color.secondary)
+            }
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.12))
+                    Capsule()
+                        .fill(HarvestTheme.green)
+                        .frame(width: proxy.size.width * counter.successRate)
+                }
+            }
+            .frame(height: 4)
+
+            LazyVGrid(columns: columns, spacing: 7) {
+                metric("成功", value: counter.successes, icon: "checkmark.seal.fill", color: HarvestTheme.green)
+                metric("失败", value: counter.failures, icon: "xmark.octagon.fill", color: HarvestTheme.coral)
+                metric("超时", value: counter.timeouts, icon: "hourglass", color: HarvestTheme.orange)
+                metric("待确认", value: counter.unmatched, icon: "questionmark.bubble.fill", color: HarvestTheme.amber)
+                metric("手动", value: counter.manualRuns, icon: "hand.tap.fill", color: HarvestTheme.indigo)
+                metric("定时", value: counter.scheduledRuns, icon: "calendar.badge.clock", color: HarvestTheme.purple)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func metric(_ label: String, value: Int, icon: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundStyle(color)
+                .frame(width: 13)
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 2)
+            Text("\(value)")
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+        }
+        .font(.caption2)
+    }
+}
+
 private struct TelegramBotCard: View {
     let bot: TelegramCheckinBot
+    let statistics: TelegramCheckinCounter
     let canRun: Bool
     let isRunning: Bool
     let onRun: () -> Void
@@ -1091,7 +1608,7 @@ private struct TelegramBotCard: View {
             }
 
             HStack(spacing: 7) {
-                Label(bot.command, systemImage: "terminal")
+                Label(bot.commands.joined(separator: " → "), systemImage: "terminal")
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Label(bot.scheduleText, systemImage: "calendar.badge.clock")
@@ -1118,6 +1635,12 @@ private struct TelegramBotCard: View {
                     Text("暂无执行记录")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
+                if statistics.runs > 0 {
+                    Label("\(statistics.successes)/\(statistics.runs)", systemImage: "chart.bar.fill")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(HarvestTheme.green)
+                        .accessibilityLabel("累计成功 \(statistics.successes) 次，共执行 \(statistics.runs) 次")
                 }
                 Spacer(minLength: 4)
                 Button(action: onHistory) {
@@ -1267,8 +1790,11 @@ private struct TelegramAccountSheet: View {
 private struct TelegramBotEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: TelegramCheckinBot
+    @State private var commands: [String]
     @State private var successKeywords: String
     @State private var failureKeywords: String
+    @State private var automaticallyPressPanelButton: Bool
+    @State private var panelButtonKeywords: String
     @State private var validationMessage: String?
     let onSave: (TelegramCheckinBot) -> Void
 
@@ -1276,8 +1802,11 @@ private struct TelegramBotEditorSheet: View {
 
     init(bot: TelegramCheckinBot, onSave: @escaping (TelegramCheckinBot) -> Void) {
         _draft = State(initialValue: bot)
+        _commands = State(initialValue: bot.commands.isEmpty ? ["/checkin"] : bot.commands)
         _successKeywords = State(initialValue: bot.successKeywords.joined(separator: "，"))
         _failureKeywords = State(initialValue: bot.failureKeywords.joined(separator: "，"))
+        _automaticallyPressPanelButton = State(initialValue: bot.pressesPanelButton)
+        _panelButtonKeywords = State(initialValue: bot.effectivePanelButtonKeywords.joined(separator: "，"))
         self.onSave = onSave
     }
 
@@ -1289,10 +1818,46 @@ private struct TelegramBotEditorSheet: View {
                     TextField("用户名，例如 checkin_bot", text: $draft.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    TextField("签到命令", text: $draft.command)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
                     Toggle("启用", isOn: $draft.isEnabled)
+                }
+
+                Section {
+                    ForEach(commands.indices, id: \.self) { index in
+                        HStack(spacing: 8) {
+                            TextField("命令 \(index + 1)", text: commandBinding(at: index))
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            if commands.count > 1 {
+                                Button(role: .destructive) {
+                                    commands.remove(at: index)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("删除命令 \(index + 1)")
+                            }
+                        }
+                    }
+                    Button {
+                        commands.append("")
+                    } label: {
+                        Label("增加命令", systemImage: "plus.circle.fill")
+                    }
+                } header: {
+                    Text("签到命令")
+                } footer: {
+                    Text("多条命令按当前顺序逐条执行，每条命令都会等待 Bot 回复。")
+                }
+
+                Section {
+                    Toggle("自动点击签到按钮", isOn: $automaticallyPressPanelButton)
+                    if automaticallyPressPanelButton {
+                        TextField("按钮关键词，用逗号分隔", text: $panelButtonKeywords)
+                    }
+                } header: {
+                    Text("面板签到")
+                } footer: {
+                    Text("收到 Bot 键盘后自动点击匹配按钮；默认匹配包含“签到”的按钮。")
                 }
 
                 Section {
@@ -1378,14 +1943,26 @@ private struct TelegramBotEditorSheet: View {
         }
     }
 
+    private func commandBinding(at index: Int) -> Binding<String> {
+        Binding {
+            commands.indices.contains(index) ? commands[index] : ""
+        } set: { value in
+            guard commands.indices.contains(index) else { return }
+            commands[index] = value
+        }
+    }
+
     private func save() {
         let username = draft.normalizedUsername
         guard !username.isEmpty else {
             validationMessage = "请输入 Bot 用户名"
             return
         }
-        guard !draft.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            validationMessage = "请输入签到命令"
+        let normalizedCommands = commands
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !normalizedCommands.isEmpty else {
+            validationMessage = "至少输入一条签到命令"
             return
         }
         guard !draft.scheduleEnabled || !draft.weekdays.isEmpty else {
@@ -1393,8 +1970,12 @@ private struct TelegramBotEditorSheet: View {
             return
         }
         draft.username = username
+        draft.command = normalizedCommands[0]
+        draft.additionalCommands = normalizedCommands.count > 1 ? Array(normalizedCommands.dropFirst()) : nil
         draft.successKeywords = keywordList(successKeywords)
         draft.failureKeywords = keywordList(failureKeywords)
+        draft.automaticallyPressPanelButton = automaticallyPressPanelButton
+        draft.panelButtonKeywords = keywordList(panelButtonKeywords)
         onSave(draft)
         dismiss()
     }

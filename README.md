@@ -7,7 +7,7 @@ Open `Harvest.xcodeproj` with Xcode 26 or later, choose a development team, and
 run the `Harvest` scheme. The backend API is shared with the Flutter client.
 
 The native target keeps the production bundle identifier `com.ptools.harvest`
-and uses version `2026.0930.01` with build `296`, so it can be signed as the next
+and uses version `2026.1009.01` with build `297`, so it can be signed as the next
 update of the existing iOS app. Do not install a Flutter and native archive with
 the same bundle identifier side by side.
 
@@ -17,8 +17,25 @@ the same bundle identifier side by side.
 改动持续追加到对应版本下，并按时间倒序排列；内容说明本次具体新增、修改、
 优化或修复了什么，不堆叠提交哈希和无意义的内部日志。
 
-### 2026.0930.01 (296) - 2026-09-30
+### 2026.1009.01 (297) - 2026-10-09
 
+- 对照 Flutter `96268b5e...afd4be55` 完成增量同步：新增豆瓣“正在热映”接口
+  `/api/option/douban/now_playing`，在豆瓣资讯首位展示并复用现有并发加载、
+  会话缓存、下拉刷新和详情页；同步解析嵌套封面、评分、副标题及“可播”状态。
+- 复核 Flutter 全局 Material 依赖清理、组件兼容层和 Web 专用 SSE fetch 分流；
+  原生 SwiftUI 已使用原生组件与 URLSession 流式搜索，不复制 Flutter/Web 实现。
+- TG Bot 签到配置支持维护多条有序命令，执行时逐条发送并分别等待回复；旧版
+  单命令配置继续兼容，卡片与执行历史会显示完整命令链。
+- TG Bot 签到支持交互面板：收到普通回复键盘时发送匹配按钮文字，收到内联
+  键盘时提交 callback payload，并继续等待 Bot 最终结果；按钮关键词可配置，
+  默认自动匹配“签到”，需要密码、网页或额外资料的按钮会明确提示而不会误点。
+- TG Bot 重试调整为单命令粒度，已经成功的命令不会因后续命令超时而重复发送；
+  内置识别“签到成功、今日已签到、已经签到”等结果并立即锁定成功状态。成功
+  记录自动通过后端现有通知接口转发到已配置的企业微信通道，转发失败仅写入
+  App 日志，不会把已经完成的 Telegram 签到改判为失败。
+- TG 签到页新增持久化累计数据面板，展示总执行、总尝试、成功率、成功、失败、
+  超时、待确认以及手动/定时次数；每个 Bot 卡片同步显示自身累计成功/执行数。
+  统计独立于 300 条执行历史上限，旧快照首次加载时会由现有历史自动回填。
 - 修复接入 TDLibKit 后其 `Date` 模型与 Foundation 日期类型同名导致的 Swift
   编译失败；Telegram 签到配置、执行记录、回复匹配与定时设置统一显式使用
   `Foundation.Date`，恢复无证书 IPA 构建。
@@ -32,6 +49,11 @@ the same bundle identifier side by side.
   存入钥匙串，TDLib 会话数据库持久化并排除 iCloud/设备备份。
 - TG Bot 支持按星期和时间前台定时签到、回复超时与有限重试、Bot 会话 ID 缓存、
   Telegram 外部跳转和操作反馈；明确 iOS 挂起或终止 App 后不保证定时任务执行。
+- App、收割机助手 Safari 扩展和 CookieCloud Safari 扩展的版本统一同步至
+  `2026.1009.01 (297)`。
+
+### 2026.0930.01 (296) - 2026-09-30
+
 - 修正下载器实时数据解析：活跃数、暂停数和总数只读取实时响应的标准字段，
   qB/TR 会话流量按各自数据结构读取，真实的 0 值可覆盖旧缓存，避免卡片与
   下载器内部统计不一致；HTTP 汇总兜底不再覆盖较新的 WebSocket 实时数据。

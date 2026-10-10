@@ -1716,6 +1716,7 @@ struct MediaItem: Identifiable {
     var year: String
     var source: String
     var mediaType: String
+    var hasLinewatch: Bool
     var raw: [String: Any]
 
     init(_ json: [String: Any], source: String, mediaType: String = "") {
@@ -1769,6 +1770,9 @@ struct MediaItem: Identifiable {
             ?? json.string("release_date", "first_air_date", "year"))?.prefix(4).description ?? ""
         self.source = source
         self.mediaType = resolvedType
+        hasLinewatch = content.bool("has_linewatch", "hasLinewatch")
+            ?? json.bool("has_linewatch", "hasLinewatch")
+            ?? false
         raw = json
     }
 }
@@ -4359,6 +4363,7 @@ struct MediaRow: View {
                     if !item.year.isEmpty { Text(item.year) }
                     let typeLabel = mediaTypeLabel(item.mediaType)
                     if !typeLabel.isEmpty { Text(typeLabel).foregroundStyle(HarvestTheme.blue) }
+                    if item.hasLinewatch { Text("可播").foregroundStyle(HarvestTheme.green) }
                     Text(item.source).foregroundStyle(HarvestTheme.green)
                 }
                 .font(.caption2)
@@ -6198,6 +6203,7 @@ struct NewsView: View {
         case .douban:
             let tag = selectedDoubanTag
             return [
+                MediaCatalogDefinition(title: "豆瓣正在热映", path: APIPath.doubanNowPlaying, source: "豆瓣", mediaType: "movie"),
                 MediaCatalogDefinition(title: "豆瓣热门电影 · \(tag)", path: APIPath.doubanHot, source: "豆瓣", mediaType: "movie", query: ["category": "movie", "tag": tag, "page_start": 0, "page_limit": 20]),
                 MediaCatalogDefinition(title: "豆瓣热门剧集 · \(tag)", path: APIPath.doubanHot, source: "豆瓣", mediaType: "tv", query: ["category": "tv", "tag": tag, "page_start": 0, "page_limit": 20]),
                 MediaCatalogDefinition(title: "豆瓣 Top250", path: APIPath.doubanTop250, source: "豆瓣", mediaType: "movie"),
@@ -6400,13 +6406,21 @@ struct MediaCarousel: View {
                                         .frame(width: 112, height: 156)
                                         .clipped()
 
-                                        Text(item.source)
-                                            .font(.system(size: 9, weight: .bold))
-                                            .foregroundStyle(.white)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 4)
-                                            .background(.black.opacity(0.58), in: Capsule())
-                                            .padding(6)
+                                        HStack(spacing: 4) {
+                                            Text(item.source)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 4)
+                                                .background(.black.opacity(0.58), in: Capsule())
+                                            if item.hasLinewatch {
+                                                Text("可播")
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 4)
+                                                    .background(HarvestTheme.green.opacity(0.90), in: Capsule())
+                                            }
+                                        }
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(6)
 
                                         if item.score > 0 {
                                             Text(String(format: "★ %.1f", item.score))

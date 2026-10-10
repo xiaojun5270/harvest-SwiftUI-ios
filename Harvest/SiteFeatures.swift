@@ -1833,7 +1833,11 @@ struct SitesView: View {
         // The shell may be created before the stored session finishes restoring.
         // Always run the cache-first load for this session so a late session
         // callback cannot leave the page stuck on the initial synchronizing view.
+        .onAppear {
+            telegramController.configureNotificationForwarding(appState)
+        }
         .task(id: appState.sessionGeneration) {
+            telegramController.configureNotificationForwarding(appState)
             model.prepareForSessionLoad(appState.sessionGeneration, server: appState.baseURL)
             await model.load(appState, background: true)
         }

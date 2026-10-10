@@ -823,6 +823,7 @@ enum APIPath {
     static let tmdbTopTV = "/api/tmdb/top_rated/tvs"
     static let doubanSearch = "/api/option/douban/search"
     static let doubanHot = "/api/option/douban/hot"
+    static let doubanNowPlaying = "/api/option/douban/now_playing"
     static let doubanTop250 = "/api/option/douban/top250"
     static let doubanRank = "/api/option/douban/rank"
     static let doubanTags = "/api/option/douban/tags"
