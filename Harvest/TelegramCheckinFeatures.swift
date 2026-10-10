@@ -71,8 +71,8 @@ struct TelegramCheckinBot: Codable, Identifiable, Equatable {
     var retryCount = 1
     var resolvedChatID: Int64?
     var resolvedTitle: String?
-    var lastRunAt: Date?
-    var lastAutomaticRunAt: Date?
+    var lastRunAt: Foundation.Date?
+    var lastAutomaticRunAt: Foundation.Date?
     var lastStatus: TelegramCheckinRunStatus = .idle
     var lastResponse = ""
 
@@ -124,7 +124,7 @@ struct TelegramCheckinHistory: Codable, Identifiable, Equatable {
     let trigger: TelegramCheckinTrigger
     let status: TelegramCheckinRunStatus
     let response: String
-    let createdAt: Date
+    let createdAt: Foundation.Date
     let duration: TimeInterval
     let attemptCount: Int
 }
@@ -209,7 +209,7 @@ final class TelegramCheckinStore: ObservableObject {
         }
     }
 
-    func markAutomaticAttempt(id: UUID, at date: Date) {
+    func markAutomaticAttempt(id: UUID, at date: Foundation.Date) {
         updateBot(id: id) { $0.lastAutomaticRunAt = date }
     }
 
@@ -219,11 +219,11 @@ final class TelegramCheckinStore: ObservableObject {
         trigger: TelegramCheckinTrigger,
         status: TelegramCheckinRunStatus,
         response: String,
-        startedAt: Date,
+        startedAt: Foundation.Date,
         attempts: Int
     ) -> TelegramCheckinHistory? {
         guard var bot = bot(id: id) else { return nil }
-        let finishedAt = Date()
+        let finishedAt = Foundation.Date()
         bot.lastRunAt = finishedAt
         bot.lastStatus = status
         bot.lastResponse = response
@@ -337,13 +337,13 @@ final class TelegramSessionController: ObservableObject {
     private struct PendingResponse {
         let chatID: Int64
         let afterMessageID: Int64
-        let startedAt: Date
+        let startedAt: Foundation.Date
         let continuation: CheckedContinuation<String?, Never>
     }
 
     private struct RecentResponse {
         let messageID: Int64
-        let date: Date
+        let date: Foundation.Date
         let text: String
     }
 
@@ -494,7 +494,7 @@ final class TelegramSessionController: ObservableObject {
             throw TelegramCheckinError.invalidConfiguration("签到命令不能为空")
         }
 
-        let startedAt = Date()
+        let startedAt = Foundation.Date()
         runningBotIDs.insert(botID)
         TelegramCheckinStore.shared.beginRun(id: botID)
         defer { runningBotIDs.remove(botID) }
@@ -690,7 +690,7 @@ final class TelegramSessionController: ObservableObject {
             TelegramCheckinStore.shared.cacheResolvedChat(id: bot.id, chatID: chat.id, title: chat.title)
         }
 
-        let startedAt = Date()
+        let startedAt = Foundation.Date()
         let content = InputMessageContent.inputMessageText(
             InputMessageText(
                 clearDraft: true,
@@ -753,7 +753,7 @@ final class TelegramSessionController: ObservableObject {
             text = "已收到 Bot 回复"
         }
         let response = text.isEmpty ? "已收到 Bot 回复" : text
-        let receivedAt = Date(timeIntervalSince1970: TimeInterval(message.date))
+        let receivedAt = Foundation.Date(timeIntervalSince1970: TimeInterval(message.date))
         var recent = recentResponses[message.chatId] ?? []
         recent.append(RecentResponse(messageID: message.id, date: receivedAt, text: response))
         recentResponses[message.chatId] = Array(recent.suffix(12))
@@ -771,7 +771,7 @@ final class TelegramSessionController: ObservableObject {
     private func waitForResponse(
         chatID: Int64,
         afterMessageID: Int64,
-        startedAt: Date,
+        startedAt: Foundation.Date,
         timeoutSeconds: Int
     ) async -> String? {
         if let recent = recentResponses[chatID]?.last(where: {
@@ -811,7 +811,7 @@ final class TelegramSessionController: ObservableObject {
 
     private func runDueBots() async {
         guard isReady else { return }
-        let now = Date()
+        let now = Foundation.Date()
         let calendar = Calendar.current
         let weekday = calendar.component(.weekday, from: now)
         let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
@@ -1358,11 +1358,16 @@ private struct TelegramBotEditorSheet: View {
         }
     }
 
-    private var scheduleDate: Binding<Date> {
+    private var scheduleDate: Binding<Foundation.Date> {
         Binding {
             let hour = draft.scheduleMinute / 60
             let minute = draft.scheduleMinute % 60
-            return Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+            return Calendar.current.date(
+                bySettingHour: hour,
+                minute: minute,
+                second: 0,
+                of: Foundation.Date()
+            ) ?? Foundation.Date()
         } set: { date in
             let values = Calendar.current.dateComponents([.hour, .minute], from: date)
             draft.scheduleMinute = (values.hour ?? 0) * 60 + (values.minute ?? 0)
