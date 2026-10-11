@@ -320,8 +320,11 @@ final class TasksViewModel: ObservableObject {
 struct TasksView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var model = TasksViewModel()
+    @StateObject private var telegramStore = TelegramCheckinStore.shared
+    @StateObject private var telegramController = TelegramSessionController.shared
     @State private var showEditor = false
     @State private var editingTask: TaskItem?
+    @State private var editingTelegramBot: TelegramCheckinBot?
     @State private var selectedResult: TaskResultItem?
     @State private var confirmClearResults = false
     @State private var deletingTask: TaskItem?
@@ -332,12 +335,20 @@ struct TasksView: View {
             if model.isLoading { LoadingState() }
             else {
                 List {
-                    if model.usingCachedData {
+                    if model.usingCachedData && model.mode != "TG 签到" {
                         SessionCacheBanner(cachedAt: model.cachedAt)
                             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                             .listRowBackground(Color.clear)
                     }
-                    Section { Picker("视图", selection: $model.mode) { Text("计划").tag("计划"); Text("执行记录").tag("执行记录") }.pickerStyle(.segmented).listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)) }
+                    Section {
+                        Picker("视图", selection: $model.mode) {
+                            Text("计划").tag("计划")
+                            Text("TG 签到").tag("TG 签到")
+                            Text("执行记录").tag("执行记录")
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    }
                     if model.mode == "计划" {
                         if model.tasks.isEmpty {
                             EmptyState(icon: "checklist", title: "没有计划任务", detail: "创建自动签到、站点更新或辅种任务", actionTitle: "新建任务") { openNewTaskEditor() }
@@ -359,6 +370,41 @@ struct TasksView: View {
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button { openTaskEditor(task) } label: { Label("编辑", systemImage: "pencil") }.tint(HarvestTheme.blue)
                                     Button(role: .destructive) { deletingTask = task } label: { Label("删除", systemImage: "trash") }
+                                }
+                            }
+                        }
+                    } else if model.mode == "TG 签到" {
+                        if telegramStore.bots.isEmpty {
+                            EmptyState(
+                                icon: "paperplane.circle",
+                                title: "没有 TG 签到任务",
+                                detail: "请先在站点页添加或自动识别 Telegram Bot"
+                            )
+                            .frame(minHeight: 320)
+                            .listRowBackground(Color.clear)
+                        } else {
+                            ForEach(telegramStore.bots) { bot in
+                                TelegramScheduleTaskRow(
+                                    bot: bot,
+                                    isRunning: telegramController.isRunning(bot.id),
+                                    onRun: { Task { await runTelegramBot(bot) } }
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingTelegramBot = bot }
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button { toggleTelegramSchedule(bot) } label: {
+                                        Label(
+                                            bot.scheduleEnabled ? "停用" : "启用",
+                                            systemImage: bot.scheduleEnabled ? "pause" : "play"
+                                        )
+                                    }
+                                    .tint(bot.scheduleEnabled ? HarvestTheme.amber : HarvestTheme.green)
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button { editingTelegramBot = bot } label: {
+                                        Label("编辑", systemImage: "pencil")
+                                    }
+                                    .tint(HarvestTheme.blue)
                                 }
                             }
                         }
@@ -384,7 +430,15 @@ struct TasksView: View {
                             }
                         }
                     }
-                }.listStyle(.insetGrouped).refreshable { await model.load(appState) }
+                }
+                .listStyle(.insetGrouped)
+                .refreshable {
+                    if model.mode == "TG 签到" {
+                        await telegramController.refreshConfiguredBots()
+                    } else {
+                        await model.load(appState)
+                    }
+                }
             }
         }
         .navigationTitle("任务中心").navigationBarTitleDisplayMode(.inline)
@@ -396,15 +450,24 @@ struct TasksView: View {
                     } else {
                         Button { openNewTaskEditor() } label: { Image(systemName: "plus") }.accessibilityLabel("新建任务")
                     }
-                } else if !model.results.isEmpty {
+                } else if model.mode == "执行记录", !model.results.isEmpty {
                     Button(role: .destructive) { confirmClearResults = true } label: { Image(systemName: "trash") }.accessibilityLabel("清空执行记录")
                 }
             }
         }
-        .task { if model.isLoading { await model.load(appState) } }
+        .task {
+            telegramController.configureNotificationForwarding(appState)
+            telegramController.resumeForegroundScheduling()
+            if model.isLoading { await model.load(appState) }
+        }
+        .onDisappear { telegramController.stopForegroundScheduling() }
         .onChange(of: appState.refreshGeneration) { _, _ in Task { await model.load(appState) } }
         .sheet(isPresented: $showEditor) { TaskEditorSheet(taskTypes: model.taskTypes, crontabs: model.crontabs) { await model.load(appState) }.environmentObject(appState) }
         .sheet(item: $editingTask) { task in TaskEditorSheet(task: task, taskTypes: model.taskTypes, crontabs: model.crontabs) { await model.load(appState) }.environmentObject(appState) }
+        .sheet(item: $editingTelegramBot) { bot in
+            TelegramScheduleEditorSheet(bot: bot) { telegramStore.saveBot($0) }
+                .presentationDetents([.large])
+        }
         .sheet(item: $selectedResult) { result in
             TaskResultDetailSheet(
                 result: result,
@@ -453,6 +516,27 @@ struct TasksView: View {
         Task {
             await model.loadEditorSupport(appState)
             editingTask = task
+        }
+    }
+
+    private func toggleTelegramSchedule(_ bot: TelegramCheckinBot) {
+        var updated = bot
+        updated.scheduleEnabled.toggle()
+        if updated.scheduleEnabled { updated.isEnabled = true }
+        telegramStore.saveBot(updated)
+    }
+
+    private func runTelegramBot(_ bot: TelegramCheckinBot) async {
+        let feedbackID = appState.beginManualTask("正在执行 TG 签到：\(bot.displayName)")
+        do {
+            let result = try await telegramController.run(botID: bot.id, trigger: .manual)
+            appState.finishManualTask(
+                feedbackID,
+                success: result.status.isSuccessful,
+                message: "\(bot.displayName)：\(result.response)"
+            )
+        } catch {
+            appState.finishManualTask(feedbackID, success: false, message: error.localizedDescription)
         }
     }
 }

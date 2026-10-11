@@ -1,9 +1,14 @@
 import Combine
+import BackgroundTasks
 import Foundation
 import Security
 import SwiftUI
 import TDLibKit
 import UIKit
+
+enum TelegramBackgroundTaskConfiguration {
+    static let identifier = "com.ptools.harvest.telegram-checkin"
+}
 
 enum TelegramCheckinRunStatus: String, Codable, CaseIterable {
     case idle
@@ -261,11 +266,13 @@ final class TelegramCheckinStore: ObservableObject {
         }
         bots.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         persist()
+        TelegramSessionController.scheduleBackgroundRefreshIfNeeded()
     }
 
     func deleteBot(id: UUID) {
         bots.removeAll { $0.id == id }
         persist()
+        TelegramSessionController.scheduleBackgroundRefreshIfNeeded()
     }
 
     func setEnabled(id: UUID, enabled: Bool) {
@@ -421,7 +428,14 @@ enum TelegramCheckinError: LocalizedError {
 
 @MainActor
 final class TelegramSessionController: ObservableObject {
-    static let shared = TelegramSessionController()
+    private static var instance: TelegramSessionController?
+
+    static var shared: TelegramSessionController {
+        if let instance { return instance }
+        let created = TelegramSessionController()
+        instance = created
+        return created
+    }
 
     @Published private(set) var phase: TelegramAuthorizationPhase = .starting
     @Published private(set) var accountName = ""
@@ -645,6 +659,27 @@ final class TelegramSessionController: ObservableObject {
         }
     }
 
+    func refreshConfiguredBots() async {
+        guard isReady, let client else { return }
+        for bot in TelegramCheckinStore.shared.bots {
+            do {
+                let chat: Chat
+                if let chatID = bot.resolvedChatID {
+                    chat = try await client.getChat(chatId: chatID)
+                } else {
+                    chat = try await client.searchPublicChat(username: bot.normalizedUsername)
+                }
+                TelegramCheckinStore.shared.cacheResolvedChat(
+                    id: bot.id,
+                    chatID: chat.id,
+                    title: chat.title
+                )
+            } catch {
+                recordAppLog(.warning, "刷新 TG Bot \(bot.displayName) 失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
     @discardableResult
     func run(botID: UUID, trigger: TelegramCheckinTrigger) async throws -> TelegramCheckinHistory {
         guard isReady, let client else { throw TelegramCheckinError.notAuthorized }
@@ -696,7 +731,42 @@ final class TelegramSessionController: ObservableObject {
     func resumeForegroundScheduling() {
         guard isReady else { return }
         startScheduler()
+        Self.scheduleBackgroundRefreshIfNeeded()
         Task { await runDueBots() }
+    }
+
+    static func scheduleBackgroundRefreshIfNeeded() {
+        guard TelegramCheckinStore.shared.bots.contains(where: { $0.isEnabled && $0.scheduleEnabled }) else { return }
+        let request = BGAppRefreshTaskRequest(identifier: TelegramBackgroundTaskConfiguration.identifier)
+        request.earliestBeginDate = Foundation.Date(timeIntervalSinceNow: 15 * 60)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            recordAppLog(.warning, "提交 TG 后台签到任务失败：\(error.localizedDescription)")
+        }
+    }
+
+    func stopForegroundScheduling() {
+        schedulerTask?.cancel()
+        schedulerTask = nil
+    }
+
+    func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
+        Self.scheduleBackgroundRefreshIfNeeded()
+        let work = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if !isReady, hasSavedCredentials {
+                for _ in 0..<10 where !isReady && !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+            await runDueBots()
+        }
+        task.expirationHandler = { work.cancel() }
+        Task { @MainActor in
+            await work.value
+            task.setTaskCompleted(success: !work.isCancelled)
+        }
     }
 
     private func receive(_ update: Update) {
@@ -737,6 +807,7 @@ final class TelegramSessionController: ObservableObject {
             lastError = nil
             Task { await loadAccount() }
             startScheduler()
+            Self.scheduleBackgroundRefreshIfNeeded()
         case .authorizationStateLoggingOut, .authorizationStateClosing:
             phase = .loggingOut
             schedulerTask?.cancel()
@@ -1427,10 +1498,11 @@ struct TelegramBotsPanel: View {
                 .scrollDismissesKeyboard(.immediately)
                 .scrollContentBackground(.hidden)
                 .background(Color(uiColor: .systemGroupedBackground))
-                .refreshable { await runAll() }
+                .refreshable { await controller.refreshConfiguredBots() }
             }
         }
         .onAppear { controller.resumeForegroundScheduling() }
+        .onDisappear { controller.stopForegroundScheduling() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             controller.resumeForegroundScheduling()
         }
@@ -1971,6 +2043,156 @@ private struct TelegramAccountSheet: View {
     }
 }
 
+struct TelegramScheduleTaskRow: View {
+    let bot: TelegramCheckinBot
+    let isRunning: Bool
+    let onRun: () -> Void
+
+    var body: some View {
+        HStack(spacing: 11) {
+            FlowingSymbolBadge(
+                icon: "paperplane.fill",
+                color: bot.scheduleEnabled && bot.isEnabled ? HarvestTheme.blue : Color.secondary,
+                size: 38,
+                showsProgress: isRunning
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(bot.displayName)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("TG Bot 签到")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Label(bot.scheduleText, systemImage: "calendar.badge.clock")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 5)
+            VStack(alignment: .trailing, spacing: 7) {
+                Text(bot.scheduleEnabled && bot.isEnabled ? "已启用" : "已停用")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(bot.scheduleEnabled && bot.isEnabled ? HarvestTheme.green : Color.secondary)
+                Button(action: onRun) {
+                    if isRunning { ProgressView().controlSize(.small) }
+                    else { Image(systemName: "play.fill") }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isRunning || !bot.isEnabled)
+                .accessibilityLabel("立即执行 \(bot.displayName) 签到")
+            }
+        }
+        .padding(.vertical, 5)
+    }
+}
+
+struct TelegramScheduleEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: TelegramCheckinBot
+    @State private var validationMessage: String?
+    let onSave: (TelegramCheckinBot) -> Void
+
+    private let weekdayOptions = [(2, "一"), (3, "二"), (4, "三"), (5, "四"), (6, "五"), (7, "六"), (1, "日")]
+
+    init(bot: TelegramCheckinBot, onSave: @escaping (TelegramCheckinBot) -> Void) {
+        _draft = State(initialValue: bot)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("任务") {
+                    LabeledContent("Bot", value: draft.displayName)
+                    LabeledContent("账号", value: "@\(draft.normalizedUsername)")
+                    Toggle("启用 Bot", isOn: $draft.isEnabled)
+                    Toggle("启用定时签到", isOn: $draft.scheduleEnabled)
+                }
+
+                Section {
+                    DatePicker("执行时间", selection: scheduleDate, displayedComponents: .hourAndMinute)
+                    HStack(spacing: 6) {
+                        ForEach(weekdayOptions, id: \.0) { value, label in
+                            Button {
+                                toggleWeekday(value)
+                            } label: {
+                                Text(label)
+                                    .font(.caption.weight(.semibold))
+                                    .frame(maxWidth: .infinity, minHeight: 30)
+                                    .foregroundStyle(draft.weekdays.contains(value) ? Color.white : Color.primary)
+                                    .background(
+                                        draft.weekdays.contains(value) ? HarvestTheme.blue : Color.secondary.opacity(0.10),
+                                        in: Circle()
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                } header: {
+                    Text("执行计划")
+                } footer: {
+                    Text("TG 定时签到由 App 在前台检查执行；iOS 挂起或终止 App 后不能保证准时运行。")
+                }
+
+                Section("执行内容") {
+                    ForEach(Array(draft.commands.enumerated()), id: \.offset) { index, command in
+                        LabeledContent("命令 \(index + 1)", value: command)
+                    }
+                    LabeledContent("超时", value: "\(draft.timeoutSeconds) 秒")
+                    LabeledContent("重试", value: "\(draft.retryCount) 次")
+                }
+
+                if let validationMessage {
+                    Section {
+                        Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(HarvestTheme.coral)
+                    }
+                }
+            }
+            .navigationTitle("TG 签到任务")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                }
+            }
+        }
+    }
+
+    private var scheduleDate: Binding<Foundation.Date> {
+        Binding {
+            let hour = draft.scheduleMinute / 60
+            let minute = draft.scheduleMinute % 60
+            return Calendar.current.date(
+                bySettingHour: hour,
+                minute: minute,
+                second: 0,
+                of: Foundation.Date()
+            ) ?? Foundation.Date()
+        } set: { date in
+            let values = Calendar.current.dateComponents([.hour, .minute], from: date)
+            draft.scheduleMinute = (values.hour ?? 0) * 60 + (values.minute ?? 0)
+        }
+    }
+
+    private func toggleWeekday(_ value: Int) {
+        if draft.weekdays.contains(value) { draft.weekdays.removeAll { $0 == value } }
+        else { draft.weekdays.append(value) }
+    }
+
+    private func save() {
+        guard !draft.scheduleEnabled || !draft.weekdays.isEmpty else {
+            validationMessage = "启用定时签到时至少选择一天"
+            return
+        }
+        onSave(draft)
+        dismiss()
+    }
+}
+
 private struct TelegramBotEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: TelegramCheckinBot
@@ -1981,8 +2203,6 @@ private struct TelegramBotEditorSheet: View {
     @State private var panelButtonKeywords: String
     @State private var validationMessage: String?
     let onSave: (TelegramCheckinBot) -> Void
-
-    private let weekdayOptions = [(2, "一"), (3, "二"), (4, "三"), (5, "四"), (6, "五"), (7, "六"), (1, "日")]
 
     init(bot: TelegramCheckinBot, onSave: @escaping (TelegramCheckinBot) -> Void) {
         _draft = State(initialValue: bot)
@@ -2053,38 +2273,6 @@ private struct TelegramBotEditorSheet: View {
                     Text("未填写成功关键词时，收到任意回复即记为成功；失败关键词优先。")
                 }
 
-                Section {
-                    Toggle("启用定时", isOn: $draft.scheduleEnabled)
-                    if draft.scheduleEnabled {
-                        DatePicker("执行时间", selection: scheduleDate, displayedComponents: .hourAndMinute)
-                        HStack(spacing: 6) {
-                            ForEach(weekdayOptions, id: \.0) { value, label in
-                                Button {
-                                    if draft.weekdays.contains(value) {
-                                        draft.weekdays.removeAll { $0 == value }
-                                    } else {
-                                        draft.weekdays.append(value)
-                                    }
-                                } label: {
-                                    Text(label)
-                                        .font(.caption.weight(.semibold))
-                                        .frame(maxWidth: .infinity, minHeight: 28)
-                                        .foregroundStyle(draft.weekdays.contains(value) ? Color.white : Color.primary)
-                                        .background(
-                                            draft.weekdays.contains(value) ? HarvestTheme.blue : Color.secondary.opacity(0.10),
-                                            in: Circle()
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                } header: {
-                    Text("定时签到")
-                } footer: {
-                    Text("定时任务在 App 前台运行；iOS 挂起或终止 App 后不能保证准时执行。")
-                }
-
                 Section("执行策略") {
                     Stepper("等待回复：\(draft.timeoutSeconds) 秒", value: $draft.timeoutSeconds, in: 5...120, step: 5)
                     Stepper("超时重试：\(draft.retryCount) 次", value: $draft.retryCount, in: 0...3)
@@ -2111,22 +2299,6 @@ private struct TelegramBotEditorSheet: View {
         }
     }
 
-    private var scheduleDate: Binding<Foundation.Date> {
-        Binding {
-            let hour = draft.scheduleMinute / 60
-            let minute = draft.scheduleMinute % 60
-            return Calendar.current.date(
-                bySettingHour: hour,
-                minute: minute,
-                second: 0,
-                of: Foundation.Date()
-            ) ?? Foundation.Date()
-        } set: { date in
-            let values = Calendar.current.dateComponents([.hour, .minute], from: date)
-            draft.scheduleMinute = (values.hour ?? 0) * 60 + (values.minute ?? 0)
-        }
-    }
-
     private func commandBinding(at index: Int) -> Binding<String> {
         Binding {
             commands.indices.contains(index) ? commands[index] : ""
@@ -2147,10 +2319,6 @@ private struct TelegramBotEditorSheet: View {
             .filter { !$0.isEmpty }
         guard !normalizedCommands.isEmpty else {
             validationMessage = "至少输入一条签到命令"
-            return
-        }
-        guard !draft.scheduleEnabled || !draft.weekdays.isEmpty else {
-            validationMessage = "定时签到至少选择一天"
             return
         }
         draft.username = username

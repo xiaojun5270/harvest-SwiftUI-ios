@@ -1,6 +1,6 @@
 # iOS Native Migration Audit
 
-Audit date: 2026-10-10
+Audit date: 2026-10-11
 
 Reference: the Flutter implementation in the parent repository and its active
 UI/service call sites.
@@ -20,6 +20,14 @@ An authoritative 1:1 result still requires an Xcode 26 build, API integration
 pass, and device testing against a reachable Harvest server.
 
 ## Latest Corrections
+
+- The Flutter delta from `afd4be55` through release `3559697e` was reviewed.
+  Flutter's fixes keep GoRouter as a single instance to avoid duplicate
+  `GlobalKey`s, defer a Riverpod scroll-controller cleanup during widget disposal,
+  and add `Stack` ancestors for Flutter `OverlayEntry`/`Positioned` rendering.
+  Native SwiftUI has no GoRouter, Riverpod provider disposal, or Flutter overlay
+  parent-data path, so no product code was copied. App and both Safari extension
+  targets are synchronized to `2026.1011.01+298`.
 
 - The Flutter delta from `96268b5e` through release `afd4be55` was reviewed.
   Its cross-platform product change adds the Douban now-playing endpoint, model,
@@ -48,6 +56,15 @@ pass, and device testing against a reachable Harvest server.
   Bot setup can also discover private Bot accounts from the loaded Telegram main
   and archive chat lists, with searchable multi-selection, duplicate detection,
   and cached chat identifiers; manual creation remains available.
+  Telegram schedule settings now live in the Tasks center's dedicated TG section;
+  pulling to refresh the Sites TG list only refreshes chat metadata and never
+  starts a check-in run.
+  Scheduling is now owned by the app lifecycle and an iOS `BGAppRefreshTask`, so
+  opening the Sites or Tasks screen is no longer required to submit or check a
+  due run. iOS still controls background wake timing and may defer execution.
+  TDLib is lazily initialized only when a TG screen is opened or a background task
+  actually wakes the app; ordinary app launch/activation does not create a TDLib
+  manager, and foreground polling stops when those screens disappear.
 
 - An iOS-only Telegram check-in workflow was added without extending the Harvest
   backend contract. The Sites screen now includes a Telegram Bot card list with

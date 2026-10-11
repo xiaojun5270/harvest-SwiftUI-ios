@@ -7,7 +7,7 @@ Open `Harvest.xcodeproj` with Xcode 26 or later, choose a development team, and
 run the `Harvest` scheme. The backend API is shared with the Flutter client.
 
 The native target keeps the production bundle identifier `com.ptools.harvest`
-and uses version `2026.1009.01` with build `297`, so it can be signed as the next
+and uses version `2026.1011.01` with build `298`, so it can be signed as the next
 update of the existing iOS app. Do not install a Flutter and native archive with
 the same bundle identifier side by side.
 
@@ -16,6 +16,14 @@ the same bundle identifier side by side.
 后续每次代码修改完成后均同步更新此处，无论是否调整版本号。同一发布版本的
 改动持续追加到对应版本下，并按时间倒序排列；内容说明本次具体新增、修改、
 优化或修复了什么，不堆叠提交哈希和无意义的内部日志。
+
+### 2026.1011.01 (298) - 2026-10-11
+
+- 对照 Flutter `afd4be55...3559697e` 完成增量审查：Flutter 新增的
+  GoRouter 单实例、Overlay 定位和 dispose 期间 Provider 延迟更新均属于 Flutter
+  渲染/路由实现，原生 SwiftUI 没有对应代码路径，无需复制；原生功能和接口保持不变。
+- App、收割机助手 Safari 扩展和 CookieCloud Safari 扩展的版本统一同步至
+  `2026.1011.01 (298)`。
 
 ### 2026.1009.01 (297) - 2026-10-09
 
@@ -39,6 +47,15 @@ the same bundle identifier side by side.
 - TG Bot 新增自动识别列表：读取已登录 Telegram 的主聊天和归档聊天，只筛选
   真实私聊 Bot，支持搜索、多选和批量添加；已配置 Bot 自动标记并跳过，新增项
   同时缓存聊天 ID，保留手动添加入口作为补充。
+- TG 定时签到设置移入任务中心的“TG 签到”分段，统一管理启用状态、执行时间、
+  星期和命令预览；站点页 TG 列表下拉刷新现在只刷新 Bot 聊天元数据，不会触发
+  批量签到或发送 Telegram 命令。
+- TG 调度器接入 App 生命周期与 iOS `BGAppRefreshTask`：前台恢复时立即检查，
+  进入后台时提交下一次系统唤醒请求，不再要求用户先打开站点页或任务中心；后台
+  是否实际唤醒仍由 iOS 系统策略决定，不能保证固定时间执行。
+- TG 会话改为按需初始化：App 启动和普通前后台切换不再创建 TDLib；只有打开
+  TG 页面/任务中心或系统实际唤醒后台任务时才启动，页面离开后停止前台轮询。
+  未配置启用定时 Bot 时不会提交后台刷新请求，降低常驻内存和电量消耗。
 - 修复接入 TDLibKit 后其 `Date` 模型与 Foundation 日期类型同名导致的 Swift
   编译失败；Telegram 签到配置、执行记录、回复匹配与定时设置统一显式使用
   `Foundation.Date`，恢复无证书 IPA 构建。
@@ -52,8 +69,6 @@ the same bundle identifier side by side.
   存入钥匙串，TDLib 会话数据库持久化并排除 iCloud/设备备份。
 - TG Bot 支持按星期和时间前台定时签到、回复超时与有限重试、Bot 会话 ID 缓存、
   Telegram 外部跳转和操作反馈；明确 iOS 挂起或终止 App 后不保证定时任务执行。
-- App、收割机助手 Safari 扩展和 CookieCloud Safari 扩展的版本统一同步至
-  `2026.1009.01 (297)`。
 
 ### 2026.0930.01 (296) - 2026-09-30
 

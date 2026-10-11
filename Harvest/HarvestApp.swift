@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import BackgroundTasks
 
 final class HarvestAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
@@ -9,11 +10,26 @@ final class HarvestAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificat
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         HarvestPerformanceMonitor.shared.start()
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: TelegramBackgroundTaskConfiguration.identifier,
+            using: nil
+        ) { task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            Task { @MainActor in
+                TelegramSessionController.shared.handleBackgroundRefresh(refreshTask)
+            }
+        }
         return true
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         Task { await AppLogStore.shared.flush() }
+        Task { @MainActor in
+            TelegramSessionController.scheduleBackgroundRefreshIfNeeded()
+        }
     }
 
     func userNotificationCenter(
