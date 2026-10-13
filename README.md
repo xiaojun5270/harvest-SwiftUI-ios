@@ -7,7 +7,7 @@ Open `Harvest.xcodeproj` with Xcode 26 or later, choose a development team, and
 run the `Harvest` scheme. The backend API is shared with the Flutter client.
 
 The native target keeps the production bundle identifier `com.ptools.harvest`
-and uses version `2026.1011.01` with build `298`, so it can be signed as the next
+and uses version `2026.1013.02` with build `300`, so it can be signed as the next
 update of the existing iOS app. Do not install a Flutter and native archive with
 the same bundle identifier side by side.
 
@@ -16,6 +16,14 @@ the same bundle identifier side by side.
 后续每次代码修改完成后均同步更新此处，无论是否调整版本号。同一发布版本的
 改动持续追加到对应版本下，并按时间倒序排列；内容说明本次具体新增、修改、
 优化或修复了什么，不堆叠提交哈希和无意义的内部日志。
+
+### 2026.1013.02 (300) - 2026-10-13
+
+- 对照 Flutter `3559697e...a5801bcb` 完成增量审查：Android CI 的
+  `flutter_inappwebview_android` ProGuard 补丁、Web SSE 条件导出类名修复和
+  Flutter 依赖锁变化均不适用于原生 SwiftUI/URLSession 工程，无需复制代码。
+- App、收割机助手 Safari 扩展和 CookieCloud Safari 扩展的版本统一同步至
+  `2026.1013.02 (300)`。
 
 ### 2026.1011.01 (298) - 2026-10-11
 

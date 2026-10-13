@@ -1,6 +1,6 @@
 # iOS Native Migration Audit
 
-Audit date: 2026-10-11
+Audit date: 2026-10-13
 
 Reference: the Flutter implementation in the parent repository and its active
 UI/service call sites.
@@ -20,6 +20,13 @@ An authoritative 1:1 result still requires an Xcode 26 build, API integration
 pass, and device testing against a reachable Harvest server.
 
 ## Latest Corrections
+
+- The Flutter delta from `3559697e` through release `a5801bcb` was reviewed.
+  It hardens an Android-only `flutter_inappwebview_android` ProGuard patch, fixes
+  the exported class name in the Web-only fetch SSE implementation, refreshes
+  Flutter dependency locks, and bumps the release. Native SwiftUI uses URLSession
+  streaming and a separate unsigned-iOS workflow, so no product code applies.
+  App and both Safari extension targets are synchronized to `2026.1013.02+300`.
 
 - The Flutter delta from `afd4be55` through release `3559697e` was reviewed.
   Flutter's fixes keep GoRouter as a single instance to avoid duplicate
