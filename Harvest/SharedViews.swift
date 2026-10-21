@@ -2337,6 +2337,7 @@ struct FlowingSymbolBadge: View {
     var size: CGFloat = 38
     var showsProgress = false
     var usesSolidFill = true
+    var showsFlowEffect = true
 
     private var cornerRadius: CGFloat { max(5, size * 0.2) }
     private var glowLineWidth: CGFloat { max(1.15, size * 0.05) }
@@ -2370,14 +2371,16 @@ struct FlowingSymbolBadge: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(color.opacity(usesSolidFill ? 0.24 : 0.18), lineWidth: 0.7)
 
-            HardwareFlowingBorder(
-                color: usesSolidFill ? color : color.opacity(0.58),
-                lineWidth: glowLineWidth,
-                cornerRadius: cornerRadius,
-                circular: false,
-                phaseOffset: phaseOffset,
-                paused: reduceMotion || flowEffectsPaused
-            )
+            if showsFlowEffect {
+                HardwareFlowingBorder(
+                    color: usesSolidFill ? color : color.opacity(0.58),
+                    lineWidth: glowLineWidth,
+                    cornerRadius: cornerRadius,
+                    circular: false,
+                    phaseOffset: phaseOffset,
+                    paused: reduceMotion || flowEffectsPaused
+                )
+            }
         }
     }
 }

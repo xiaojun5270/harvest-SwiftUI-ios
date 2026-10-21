@@ -2120,19 +2120,11 @@ private struct SiteSearchFilterBar: View {
                 )
             }
         } label: {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 15, weight: .semibold))
-                Image(systemName: model.ascending ? "arrow.up" : "arrow.down")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 13, height: 13)
-                    .background(HarvestTheme.blue, in: Circle())
-                    .offset(x: -2, y: -2)
-            }
-            .frame(width: 38, height: 38)
-            .foregroundStyle(HarvestTheme.blue)
-            .contentShape(Rectangle())
+            Image(systemName: model.ascending ? "arrow.up" : "arrow.down")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 38, height: 38)
+                .foregroundStyle(HarvestTheme.blue)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("排序：\(model.sortField.rawValue)，\(model.ascending ? "升序" : "降序")")
@@ -3764,21 +3756,14 @@ struct SiteRow: View {
             .accessibilityLabel("查看\(privacyMaskedText(site.name, enabled: privacy))详情")
         }
         .padding(11)
-        .background(
-            Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-        )
+        .harvestGlassSurface(cornerRadius: HarvestTheme.cardCornerRadius)
         .overlay {
-            ZStack {
+            if isRefreshing {
                 RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-                    .stroke(site.enabled ? HarvestTheme.green.opacity(0.22) : HarvestTheme.coral.opacity(0.18))
-                if isRefreshing {
-                    RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-                        .fill(Color(uiColor: .systemBackground).opacity(0.72))
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(HarvestTheme.blue)
-                }
+                    .fill(.regularMaterial)
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(HarvestTheme.blue)
             }
         }
         .padding(.horizontal, 16)

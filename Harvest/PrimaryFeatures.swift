@@ -2747,7 +2747,8 @@ private struct DashboardSiteStatusView: View {
             icon: "globe.asia.australia.fill",
             color: HarvestTheme.blue,
             itemCount: items.count,
-            rowHeight: DashboardListLayout.siteRowHeight
+            rowHeight: DashboardListLayout.siteRowHeight,
+            showsFlowEffect: false
         ) {
             LazyVStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -2760,7 +2761,12 @@ private struct DashboardSiteStatusView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             if item.published > 0 {
                                 HStack(spacing: 4) {
-                                    FlowingSymbolBadge(icon: "paperplane", color: HarvestTheme.coral, size: 18)
+                                    FlowingSymbolBadge(
+                                        icon: "paperplane",
+                                        color: HarvestTheme.coral,
+                                        size: 18,
+                                        showsFlowEffect: false
+                                    )
                                     Text(formatCompactNumber(item.published))
                                 }
                                     .font(.caption2.weight(.semibold).monospacedDigit())
@@ -2777,14 +2783,14 @@ private struct DashboardSiteStatusView: View {
                                 maximum: maximumUpload,
                                 icon: "arrow.up",
                                 color: HarvestTheme.green,
-                                emphasizesLeadingEdge: index < 3
+                                emphasizesLeadingEdge: false
                             )
                             dashboardCapacityMetric(
                                 item.downloaded,
                                 maximum: maximumDownload,
                                 icon: "arrow.down",
                                 color: HarvestTheme.blue,
-                                emphasizesLeadingEdge: index < 3
+                                emphasizesLeadingEdge: false
                             )
                         }
                         .padding(.leading, 20)
@@ -2808,7 +2814,12 @@ private struct DashboardSiteStatusView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
-                FlowingSymbolBadge(icon: icon, color: color, size: 18)
+                FlowingSymbolBadge(
+                    icon: icon,
+                    color: color,
+                    size: 18,
+                    showsFlowEffect: false
+                )
                 Text(dashboardCompactBytes(value))
             }
                 .font(.caption2.weight(.medium).monospacedDigit())
@@ -3061,7 +3072,8 @@ private struct DistributionView: View {
             icon: metric.icon ?? "chart.bar.fill",
             color: metric.color,
             itemCount: items.count,
-            rowHeight: DashboardListLayout.distributionRowHeight
+            rowHeight: DashboardListLayout.distributionRowHeight,
+            showsFlowEffect: false
         ) {
             let maximum = max(items.map(\.value).filter { $0.isFinite }.max() ?? 1, 1)
             let total = max(
@@ -3081,7 +3093,12 @@ private struct DistributionView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             HStack(spacing: 4) {
                                 if let icon = metric.icon {
-                                    FlowingSymbolBadge(icon: icon, color: metric.color, size: 18)
+                                    FlowingSymbolBadge(
+                                        icon: icon,
+                                        color: metric.color,
+                                        size: 18,
+                                        showsFlowEffect: false
+                                    )
                                 }
                                 Text(metric.format(item.value))
                             }
@@ -3100,7 +3117,7 @@ private struct DistributionView: View {
                             maximum: maximum,
                             color: metric.color,
                             height: 7,
-                            emphasizesLeadingEdge: index < 3
+                            emphasizesLeadingEdge: false
                         )
                         .padding(.leading, 20)
                     }
@@ -3278,6 +3295,7 @@ private struct DashboardScrollableModule<Content: View>: View {
     let itemCount: Int
     let rowHeight: CGFloat
     let contentHeightAdjustment: CGFloat
+    let showsFlowEffect: Bool
     let content: Content
 
     init(
@@ -3288,6 +3306,7 @@ private struct DashboardScrollableModule<Content: View>: View {
         itemCount: Int,
         rowHeight: CGFloat,
         contentHeightAdjustment: CGFloat = 0,
+        showsFlowEffect: Bool = true,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
@@ -3297,6 +3316,7 @@ private struct DashboardScrollableModule<Content: View>: View {
         self.itemCount = itemCount
         self.rowHeight = rowHeight
         self.contentHeightAdjustment = contentHeightAdjustment
+        self.showsFlowEffect = showsFlowEffect
         self.content = content()
     }
 
@@ -3308,7 +3328,12 @@ private struct DashboardScrollableModule<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 9) {
-                FlowingSymbolBadge(icon: icon, color: color, size: 30)
+                FlowingSymbolBadge(
+                    icon: icon,
+                    color: color,
+                    size: 30,
+                    showsFlowEffect: showsFlowEffect
+                )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.headline.weight(.bold))
                     Text(subtitle)

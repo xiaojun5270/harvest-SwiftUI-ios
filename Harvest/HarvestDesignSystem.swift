@@ -121,9 +121,37 @@ private struct HarvestCardModifier: ViewModifier {
     }
 }
 
+private struct HarvestGlassSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+        } else {
+            content
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(Color.primary.opacity(0.075), lineWidth: HarvestDesignSystem.Layout.hairline)
+                }
+        }
+    }
+}
+
 extension View {
     func harvestCard(_ style: HarvestCardStyle = .standard) -> some View {
         modifier(HarvestCardModifier(style: style))
+    }
+
+    func harvestGlassSurface(cornerRadius: CGFloat = HarvestDesignSystem.Radius.card) -> some View {
+        modifier(HarvestGlassSurfaceModifier(cornerRadius: cornerRadius))
     }
 }
 

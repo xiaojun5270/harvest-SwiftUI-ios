@@ -612,6 +612,76 @@ private struct DownloaderSpeedEventSnapshot: @unchecked Sendable {
     let event: [String: Any]?
 }
 
+private struct DownloaderCountSummary: Sendable {
+    let active: Int
+    let paused: Int
+    let total: Int
+}
+
+private struct DownloaderCountPayload: @unchecked Sendable {
+    let value: Any
+}
+
+private func downloaderCountRows(_ value: Any, depth: Int = 0) -> [[String: Any]] {
+    guard depth < 6 else { return [] }
+    if let rows = value as? [[String: Any]] { return rows }
+    guard let dictionary = jsonDictionary(value) else { return [] }
+    for key in ["torrents", "items", "list", "rows", "records"] {
+        if let rows = dictionary[key] as? [[String: Any]] { return rows }
+        if let keyedRows = dictionary[key] as? [String: Any] {
+            let rows = keyedRows.compactMap { key, value -> [String: Any]? in
+                guard var row = value as? [String: Any] else { return nil }
+                if row["hash"] == nil && row["hashString"] == nil { row["hash"] = key }
+                return row
+            }
+            if !rows.isEmpty { return rows }
+        }
+    }
+    for key in ["data", "result"] {
+        guard let nested = dictionary[key] else { continue }
+        let rows = downloaderCountRows(nested, depth: depth + 1)
+        if !rows.isEmpty { return rows }
+    }
+    return jsonRows(value).filter { row in
+        row.string("hashString", "hash_string", "hash", "name", "title") != nil
+            || row.string("state", "status") != nil
+    }
+}
+
+private func downloaderCountSummary(_ value: Any, category: String) -> DownloaderCountSummary {
+    let root = jsonDictionary(value) ?? [:]
+    let rows = downloaderCountRows(value)
+    let reportedTotal = max(0, downloaderMetricInt(root, keys: downloaderTotalCountKeys) ?? 0)
+    let reportedActive = max(0, downloaderMetricInt(root, keys: downloaderActiveCountKeys) ?? 0)
+    let reportedPaused = max(0, downloaderMetricInt(root, keys: downloaderPausedCountKeys) ?? 0)
+    let derivedActive = rows.reduce(into: 0) { count, row in
+        let downloadSpeed = row.double("rateDownload", "dlspeed", "download_speed", "rate_download") ?? 0
+        let uploadSpeed = row.double("rateUpload", "upspeed", "upload_speed", "rate_upload") ?? 0
+        let state = row.string("state", "status")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let transmissionActive = downloaderIsTransmission(category) && [4, 6].contains(Int(state) ?? -1)
+        let qBittorrentActiveStates = [
+            "downloading", "uploading", "forceddl", "forcedup", "checkingdl", "checkingup", "metadl"
+        ]
+        if downloadSpeed > 0 || uploadSpeed > 0 || transmissionActive || qBittorrentActiveStates.contains(state) {
+            count += 1
+        }
+    }
+    let derivedPaused = rows.reduce(into: 0) { count, row in
+        let state = row.string("state", "status")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if downloaderIsTransmission(category) {
+            if Int(state) == 0 { count += 1 }
+        } else if state.contains("pause") || state.contains("stop") || state.contains("暂停") || state.contains("停止") {
+            count += 1
+        }
+    }
+    let total = max(reportedTotal, rows.count)
+    let activeCandidate = max(reportedActive, derivedActive)
+    let pausedCandidate = max(reportedPaused, derivedPaused)
+    let active = total > 0 ? min(activeCandidate, total) : activeCandidate
+    let paused = total > 0 ? min(pausedCandidate, total) : pausedCandidate
+    return DownloaderCountSummary(active: active, paused: paused, total: total)
+}
+
 private struct TorrentFilterCriteria: @unchecked Sendable {
     let query: String
     let status: String
@@ -811,6 +881,7 @@ final class DownloadsViewModel: ObservableObject {
     @Published private(set) var refreshDeadline: Date?
     @Published private(set) var cachedAt: Date?
     @Published private(set) var usingCachedData = false
+    @Published private(set) var resolvingCountIDs: Set<Int> = []
     @Published private var derived = TorrentDerivedState()
     private var speedWatchTask: Task<Void, Never>?
     private var downloaderWatchTasks: [Int: Task<Void, Never>] = [:]
@@ -821,6 +892,7 @@ final class DownloadsViewModel: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private var cacheWriteTask: Task<Void, Never>?
     private var statusBootstrapTask: Task<Void, Never>?
+    private var countFallbackTask: Task<Void, Never>?
     private var filterRebuildTask: Task<Void, Never>?
     private var metadataRebuildTask: Task<Void, Never>?
     private var filterRebuildGeneration = 0
@@ -848,6 +920,7 @@ final class DownloadsViewModel: ObservableObject {
         countdownTask?.cancel()
         cacheWriteTask?.cancel()
         statusBootstrapTask?.cancel()
+        countFallbackTask?.cancel()
         filterRebuildTask?.cancel()
         metadataRebuildTask?.cancel()
     }
@@ -1041,6 +1114,7 @@ final class DownloadsViewModel: ObservableObject {
                 sites = []
                 scheduleCachePersistence(appState)
                 if !isWatching { scheduleStatusBootstrap(appState) }
+                scheduleCountFallback(appState)
                 return
             }
             let previousTorrents = torrents
@@ -1566,6 +1640,9 @@ final class DownloadsViewModel: ObservableObject {
         isViewActive = false
         statusBootstrapTask?.cancel()
         statusBootstrapTask = nil
+        countFallbackTask?.cancel()
+        countFallbackTask = nil
+        resolvingCountIDs = []
         stopActiveWatching(clearRemaining: true)
     }
 
@@ -1660,6 +1737,74 @@ final class DownloadsViewModel: ObservableObject {
             if let event { model.applyDownloaderSpeedEvent(event, appState: appState) }
             model.statusBootstrapTask = nil
         }
+    }
+
+    private func scheduleCountFallback(_ appState: AppState) {
+        countFallbackTask?.cancel()
+        let reference = WeakReference(self)
+        countFallbackTask = Task {
+            do { try await Task.sleep(for: .milliseconds(700)) }
+            catch { return }
+            guard let model = reference.value, !Task.isCancelled else { return }
+            let candidates = model.downloaders.filter {
+                $0.enabled && (
+                    $0.totalTorrentCount == 0
+                        || downloaderMetricInt($0.raw, keys: downloaderTotalCountKeys) == nil
+                        || (downloaderMetricInt($0.raw, keys: downloaderActiveCountKeys) == nil
+                            && ($0.uploadSpeed > 0 || $0.downloadSpeed > 0))
+                )
+            }
+            model.resolvingCountIDs = Set(candidates.map(\.id))
+            for candidate in candidates {
+                guard !Task.isCancelled else { break }
+                do {
+                    let value = try await appState.api(
+                        "\(APIPath.downloaderMain)\(candidate.id)",
+                        timeoutInterval: downloaderIsTransmission(candidate.category) ? 12 : 8
+                    )
+                    let payload = DownloaderCountPayload(value: value)
+                    let category = candidate.category
+                    let summary = await Task.detached(priority: .utility) {
+                        downloaderCountSummary(payload.value, category: category)
+                    }.value
+                    guard !Task.isCancelled else { break }
+                    model.applyDownloaderCountSummary(summary, downloaderID: candidate.id, appState: appState)
+                } catch {
+                    if !isRequestCancellation(error) {
+                        recordAppLog(.warning, "下载器 \(candidate.id) 计数读取失败：\(error.localizedDescription)")
+                    }
+                }
+                model.resolvingCountIDs.remove(candidate.id)
+            }
+            model.resolvingCountIDs = []
+            model.countFallbackTask = nil
+        }
+    }
+
+    private func applyDownloaderCountSummary(
+        _ summary: DownloaderCountSummary,
+        downloaderID: Int,
+        appState: AppState
+    ) {
+        guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }) else { return }
+        let current = downloaders[index]
+        let merged = mergingDownloaderStatus([
+            "activeTorrentCount": summary.active,
+            "pausedTorrentCount": summary.paused,
+            "torrentCount": summary.total
+        ], into: current.raw)
+        let next = DownloaderItem(merged)
+        guard next.activeTorrentCount != current.activeTorrentCount
+                || next.pausedTorrentCount != current.pausedTorrentCount
+                || next.totalTorrentCount != current.totalTorrentCount else { return }
+        downloaders[index] = next
+        usingCachedData = false
+        cachedAt = nil
+        scheduleCachePersistence(appState)
+    }
+
+    func isResolvingCounts(_ downloader: DownloaderItem) -> Bool {
+        resolvingCountIDs.contains(downloader.id)
     }
 
     private func stopActiveWatching(clearRemaining: Bool) {
@@ -2080,6 +2225,7 @@ struct DownloadsView: View {
                             ForEach(model.downloaders) { downloader in
                                 DownloaderCard(
                                     item: downloader,
+                                    isResolvingCounts: model.isResolvingCounts(downloader),
                                     onOpenTorrents: { torrentListDownloader = downloader },
                                     onAddTorrent: {
                                         addTorrentDownloaderID = downloader.id
@@ -2638,6 +2784,7 @@ struct DownloaderSelectionSheet: View {
 
 struct DownloaderCard: View {
     let item: DownloaderItem
+    let isResolvingCounts: Bool
     let onOpenTorrents: () -> Void
     let onAddTorrent: () -> Void
     let onEdit: () -> Void
@@ -2662,18 +2809,23 @@ struct DownloaderCard: View {
         return item.hasLiveStatus && !state.contains("disconnected") && !state.contains("offline")
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 9) {
                 SymbolBadge(
                     icon: downloaderIcon,
                     color: accentColor,
-                    size: 40
+                    size: 38
                 )
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         Text(downloaderTypeName)
                         if !item.version.isEmpty { Text(item.version).monospacedDigit() }
+                        Circle()
+                            .fill(connected ? HarvestTheme.green : HarvestTheme.coral)
+                            .frame(width: 6, height: 6)
+                        Text(connected ? "在线" : "离线")
+                            .foregroundStyle(connected ? HarvestTheme.green : HarvestTheme.coral)
                     }
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -2706,12 +2858,7 @@ struct DownloaderCard: View {
                 }
                 .accessibilityLabel("下载器操作")
             }
-            CompactFlowLayout(spacing: 7) {
-                statusChip(
-                    connected ? "已连接" : "未连接",
-                    icon: connected ? "checkmark.circle.fill" : "xmark.circle.fill",
-                    color: connected ? HarvestTheme.green : HarvestTheme.coral
-                )
+            CompactFlowLayout(spacing: 6) {
                 statusChip(
                     item.enabled ? "已启用" : "已停用",
                     icon: item.enabled ? "power" : "pause.circle.fill",
@@ -2725,8 +2872,12 @@ struct DownloaderCard: View {
                 if item.main { statusChip("主下载器", icon: "star.fill", color: HarvestTheme.amber) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
             downloaderConnectionPanel
-            HStack(spacing: 7) {
+
+            Divider()
+            HStack(spacing: 0) {
                 transferMetric(
                     "已下载",
                     value: formatBytes(item.downloadedSession),
@@ -2734,6 +2885,7 @@ struct DownloaderCard: View {
                     icon: "arrow.down",
                     color: HarvestTheme.blue
                 )
+                Divider().frame(height: 48)
                 transferMetric(
                     "已上传",
                     value: formatBytes(item.uploadedSession),
@@ -2742,9 +2894,13 @@ struct DownloaderCard: View {
                     color: HarvestTheme.green
                 )
             }
-            HStack(spacing: 7) {
-                smallMetric("活跃", value: "\(item.activeTorrentCount)", icon: "bolt.fill", color: HarvestTheme.green)
-                smallMetric("总数", value: "\(item.totalTorrentCount)", icon: "square.stack.3d.up", color: accentColor)
+
+            Divider()
+            HStack(spacing: 0) {
+                smallMetric("活跃", value: activeCountText, icon: "bolt.fill", color: HarvestTheme.green)
+                Divider().frame(height: 34)
+                smallMetric("总数", value: totalCountText, icon: "square.stack.3d.up", color: accentColor)
+                Divider().frame(height: 34)
                 smallMetric(
                     "剩余",
                     value: item.freeSpace > 0 ? formatBytes(item.freeSpace) : "-",
@@ -2780,17 +2936,9 @@ struct DownloaderCard: View {
                 }
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
+        .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-                .stroke(item.enabled ? accentColor.opacity(0.24) : Color.primary.opacity(0.08))
-        )
+        .harvestGlassSurface(cornerRadius: HarvestTheme.cardCornerRadius)
         .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
         .onTapGesture(count: 2, perform: onOpenTorrents)
         .accessibilityAction(named: Text("打开种子列表")) { onOpenTorrents() }
@@ -2813,12 +2961,7 @@ struct DownloaderCard: View {
                 drawsDivider: false
             )
         }
-        .padding(.horizontal, 9)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.7)
-        }
+        .padding(.horizontal, 2)
     }
 
     private func downloaderInfoRow(
@@ -2837,7 +2980,7 @@ struct DownloaderCard: View {
                 Text(label)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 76, alignment: .leading)
+                    .frame(width: 70, alignment: .leading)
                 Text(value)
                     .font(.caption.monospaced())
                     .foregroundStyle(.primary)
@@ -2845,7 +2988,7 @@ struct DownloaderCard: View {
                     .minimumScaleFactor(0.65)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.vertical, 7)
+            .padding(.vertical, 5)
             if drawsDivider { Divider().padding(.leading, 28) }
         }
         .accessibilityElement(children: .combine)
@@ -2887,13 +3030,8 @@ struct DownloaderCard: View {
                 .minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(color.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(color.opacity(0.12), lineWidth: 0.8)
-        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
     }
 
     private func smallMetric(_ label: String, value: String, icon: String, color: Color) -> some View {
@@ -2914,8 +3052,17 @@ struct DownloaderCard: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 5)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .padding(.vertical, 2)
+    }
+
+    private var activeCountText: String {
+        if item.activeTorrentCount > 0 { return "\(item.activeTorrentCount)" }
+        return isResolvingCounts ? "…" : "0"
+    }
+
+    private var totalCountText: String {
+        if item.totalTorrentCount > 0 { return "\(item.totalTorrentCount)" }
+        return isResolvingCounts ? "…" : "0"
     }
 
     private var displayAddress: String {
