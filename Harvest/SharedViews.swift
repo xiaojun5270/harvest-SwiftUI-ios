@@ -1882,7 +1882,10 @@ struct MainShellView: View {
     @State private var showingAppUpdate = false
     @State private var availableAppUpdate: String?
     @State private var handledNoticePresentation = 0
+    @State private var selectedTab = 2
     @State private var lastNonSearchTab = 2
+    @State private var effectsActiveTab: Int?
+    @State private var didRestoreInitialTab = false
 
     private var showsNewsTab: Bool {
         appState.mediaTMDBEnabled || appState.mediaDoubanEnabled
@@ -1908,7 +1911,7 @@ struct MainShellView: View {
             }
             .harvestNavigationChrome()
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar((appState.selectedTab == 1 || appState.selectedTab == 5) ? .hidden : .visible, for: .navigationBar)
+            .toolbar((selectedTab == 1 || selectedTab == 5) ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     BrandMark(size: 38)
@@ -1994,6 +1997,12 @@ struct MainShellView: View {
             guard !Task.isCancelled, !showingSettings, !showingNotices else { return }
             showingAppUpdate = true
         }
+        .task(id: selectedTab) {
+            do { try await Task.sleep(for: .milliseconds(180)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            effectsActiveTab = selectedTab
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 appState.requestAutomaticRefresh()
@@ -2005,8 +2014,8 @@ struct MainShellView: View {
         }
         .onChange(of: showsNewsTab) { _, isVisible in
             guard !isVisible else { return }
-            if appState.selectedTab == 0 {
-                appState.selectedTab = defaultContentTab
+            if selectedTab == 0 {
+                selectedTab = defaultContentTab
             }
             if lastNonSearchTab == 0 {
                 lastNonSearchTab = defaultContentTab
@@ -2015,50 +2024,83 @@ struct MainShellView: View {
         .onChange(of: appState.profile?.isSuperuser) { _, isSuperuser in
             guard isSuperuser != true,
                   !appState.isRestoringSession,
-                  (appState.selectedTab == 1 || appState.selectedTab == 2) else { return }
-            appState.selectedTab = 3
+                  (selectedTab == 1 || selectedTab == 2) else { return }
+            selectedTab = 3
         }
         .onChange(of: appState.searchPresentationGeneration) { _, _ in
-            appState.selectedTab = 5
+            selectedTab = 5
         }
-        .onChange(of: appState.selectedTab) { oldValue, newValue in
+        .onChange(of: selectedTab) { oldValue, newValue in
+            effectsActiveTab = nil
             if newValue == 5, oldValue != 5 {
                 lastNonSearchTab = validContentTab(oldValue)
             } else if newValue != 5 {
                 lastNonSearchTab = validContentTab(newValue)
             }
         }
+        .onChange(of: appState.selectedTab) { _, requestedTab in
+            let resolved = requestedTab == 5 ? 5 : validContentTab(requestedTab)
+            if selectedTab != resolved { selectedTab = resolved }
+        }
+        .onAppear {
+            guard !didRestoreInitialTab else { return }
+            didRestoreInitialTab = true
+            let requestedTab = appState.selectedTab
+            selectedTab = requestedTab == 5 ? 5 : validContentTab(requestedTab)
+        }
     }
 
     @available(iOS 18.0, *)
     private var modernTabView: some View {
-        TabView(selection: $appState.selectedTab) {
+        TabView(selection: $selectedTab) {
             if showsNewsTab {
-                Tab("资讯", systemImage: "newspaper.fill", value: 0) { NewsView() }
+                Tab("资讯", systemImage: "newspaper.fill", value: 0) {
+                    NewsView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 0)
+                }
             }
             if showsAdminTabs {
-                Tab("站点", systemImage: "globe.asia.australia.fill", value: 1) { SitesView() }
-                Tab("仪表盘", systemImage: "chart.bar.xaxis", value: 2) { DashboardView() }
+                Tab("站点", systemImage: "globe.asia.australia.fill", value: 1) {
+                    SitesView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 1)
+                }
+                Tab("仪表盘", systemImage: "chart.bar.xaxis", value: 2) {
+                    DashboardView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 2)
+                }
             }
-            Tab("下载", systemImage: "arrow.down.circle.fill", value: 3) { DownloadsView() }
-            Tab("搜索", systemImage: "magnifyingglass", value: 5) {
-                SearchView { appState.selectedTab = lastNonSearchTab }
+            Tab("下载", systemImage: "arrow.down.circle.fill", value: 3) {
+                DownloadsView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 3)
+            }
+            Tab("搜索", systemImage: "magnifyingglass", value: 5, role: .search) {
+                SearchView { selectedTab = lastNonSearchTab }
+                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 5)
             }
         }
         .tint(appState.accent.color)
     }
 
     private var legacyTabView: some View {
-        TabView(selection: $appState.selectedTab) {
+        TabView(selection: $selectedTab) {
             if showsNewsTab {
-                NewsView().tabItem { Label("资讯", systemImage: "newspaper.fill") }.tag(0)
+                NewsView()
+                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 0)
+                    .tabItem { Label("资讯", systemImage: "newspaper.fill") }
+                    .tag(0)
             }
             if showsAdminTabs {
-                SitesView().tabItem { Label("站点", systemImage: "globe.asia.australia.fill") }.tag(1)
-                DashboardView().tabItem { Label("仪表盘", systemImage: "chart.bar.xaxis") }.tag(2)
+                SitesView()
+                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 1)
+                    .tabItem { Label("站点", systemImage: "globe.asia.australia.fill") }
+                    .tag(1)
+                DashboardView()
+                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 2)
+                    .tabItem { Label("仪表盘", systemImage: "chart.bar.xaxis") }
+                    .tag(2)
             }
-            DownloadsView().tabItem { Label("下载", systemImage: "arrow.down.circle.fill") }.tag(3)
-            SearchView { appState.selectedTab = lastNonSearchTab }
+            DownloadsView()
+                .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 3)
+                .tabItem { Label("下载", systemImage: "arrow.down.circle.fill") }
+                .tag(3)
+            SearchView { selectedTab = lastNonSearchTab }
+                .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 5)
                 .tabItem { Label("搜索", systemImage: "magnifyingglass") }
                 .tag(5)
         }

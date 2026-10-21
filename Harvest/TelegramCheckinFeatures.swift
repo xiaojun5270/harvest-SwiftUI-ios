@@ -1767,24 +1767,47 @@ struct TelegramBotsPanel: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            .layoutPriority(1)
             Spacer(minLength: 4)
-            Button { Task { await runAll() } } label: {
-                Image(systemName: "checkmark.seal")
-                    .frame(width: 28, height: 28)
+            tgActionToolbar
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var tgActionToolbar: some View {
+        HStack(spacing: 0) {
+            Button {
+                guard controller.runningBotIDs.isEmpty else { return }
+                Task { await runAll() }
+            } label: {
+                if controller.runningBotIDs.isEmpty {
+                    tgToolbarLabel(icon: "checkmark.seal.fill", title: "签到", color: HarvestTheme.green)
+                } else {
+                    VStack(spacing: 2) {
+                        ProgressView().controlSize(.mini).tint(HarvestTheme.green)
+                        Text("执行中").font(.system(size: 8, weight: .semibold))
+                    }
+                    .foregroundStyle(HarvestTheme.green)
+                    .frame(width: 48, height: 40)
+                }
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .controlSize(.small)
+            .buttonStyle(.plain)
             .disabled(!controller.isReady || store.bots.isEmpty)
             .accessibilityLabel("全部 TG Bot 签到")
+
+            tgToolbarDivider
+
             Button { showAccount = true } label: {
-                Image(systemName: "person.crop.circle.badge.gearshape")
-                    .frame(width: 28, height: 28)
+                tgToolbarLabel(icon: "person.crop.circle.fill", title: "账号", color: HarvestTheme.blue)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .controlSize(.small)
+            .buttonStyle(.plain)
             .accessibilityLabel("Telegram 账号")
+
+            tgToolbarDivider
+
             Menu {
                 Button { showAdd = true } label: {
                     Label("手动添加", systemImage: "square.and.pencil")
@@ -1794,18 +1817,40 @@ struct TelegramBotsPanel: View {
                 }
                 .disabled(!controller.isReady)
             } label: {
-                Image(systemName: "plus")
-                    .frame(width: 28, height: 28)
+                tgToolbarLabel(icon: "plus", title: "添加", color: HarvestTheme.blue)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .controlSize(.small)
+            .buttonStyle(.plain)
             .accessibilityLabel("添加 TG Bot")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .overlay(alignment: .bottom) { Divider() }
+        .frame(height: 40)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+                .stroke(Color.primary.opacity(0.09), lineWidth: HarvestDesignSystem.Layout.hairline)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func tgToolbarLabel(icon: String, title: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(color)
+        .frame(width: 48, height: 40)
+        .contentShape(Rectangle())
+    }
+
+    private var tgToolbarDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(width: 1, height: 22)
+            .accessibilityHidden(true)
     }
 
     private func run(_ bot: TelegramCheckinBot) async {

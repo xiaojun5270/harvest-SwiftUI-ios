@@ -760,6 +760,19 @@ final class DashboardViewModel: ObservableObject {
 
     var hasDisplayableData: Bool { snapshot.hasDisplayableData }
 
+    func loadOnAppear(_ appState: AppState, days: Int) async {
+        if hasDisplayableData,
+           let lastUpdated,
+           Date().timeIntervalSince(lastUpdated) < 60 {
+            return
+        }
+        if hasDisplayableData {
+            do { try await Task.sleep(for: .milliseconds(180)) }
+            catch { return }
+        }
+        await load(appState, days: days)
+    }
+
     func load(_ appState: AppState, days _: Int? = nil) async {
         guard !dashboardLoadInProgress else { return }
         let performanceInterval = HarvestPerformanceMonitor.shared.begin(.dashboardLoad)
@@ -1567,8 +1580,10 @@ struct DashboardView: View {
         .refreshable { await model.load(appState, days: trendDays) }
         .onAppear { migrateDesignationOrderIfNeeded() }
         .task(id: "\(trendDays)-\(autoRefresh)-\(refreshInterval)") {
-            await model.load(appState, days: trendDays)
+            await model.loadOnAppear(appState, days: trendDays)
             guard !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .milliseconds(180)) }
+            catch { return }
             model.startDownloaderSpeedMonitoring(appState)
             guard autoRefresh else { return }
             while !Task.isCancelled {
@@ -1578,6 +1593,9 @@ struct DashboardView: View {
         }
         .task(id: "\(model.isLoading)-\(showServerResources)-\(serverResourceAutoStart)-\(serverResourceInterval)-\(serverResourceDuration)") {
             guard !model.isLoading else { return }
+            do { try await Task.sleep(for: .milliseconds(220)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
             model.configureServerMonitoring(
                 appState,
                 visible: showServerResources,
@@ -2862,7 +2880,8 @@ private struct DashboardIncrementRankingView: View {
             icon: "chart.bar.xaxis",
             color: HarvestTheme.green,
             itemCount: items.count,
-            rowHeight: DashboardListLayout.incrementRowHeight
+            rowHeight: DashboardListLayout.incrementRowHeight,
+            showsFlowEffect: false
         ) {
             LazyVStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -2882,14 +2901,14 @@ private struct DashboardIncrementRankingView: View {
                                 maximum: maximumUpload,
                                 color: HarvestTheme.green,
                                 height: 5,
-                                emphasizesLeadingEdge: index < 3
+                                emphasizesLeadingEdge: false
                             )
                             DashboardMetricBar(
                                 value: item.downloaded,
                                 maximum: maximumDownload,
                                 color: HarvestTheme.blue,
                                 height: 5,
-                                emphasizesLeadingEdge: index < 3
+                                emphasizesLeadingEdge: false
                             )
                         }
                         .padding(.leading, 20)
@@ -2906,7 +2925,12 @@ private struct DashboardIncrementRankingView: View {
 
     private func incrementMetric(_ value: Double, icon: String, color: Color) -> some View {
         HStack(spacing: 4) {
-            FlowingSymbolBadge(icon: icon, color: color, size: 18)
+            FlowingSymbolBadge(
+                icon: icon,
+                color: color,
+                size: 18,
+                showsFlowEffect: false
+            )
             Text(dashboardCompactBytes(value))
         }
             .font(.caption2.weight(.medium).monospacedDigit())
@@ -3134,6 +3158,7 @@ private struct DistributionView: View {
 
 private struct DashboardMetricBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.harvestFlowEffectsPaused) private var flowEffectsPaused
 
     let value: Double
     let maximum: Double
@@ -3172,7 +3197,7 @@ private struct DashboardMetricBar: View {
                         .frame(width: min(max(filledWidth * 0.24, 10), 30))
                         .frame(maxWidth: .infinity, alignment: .trailing)
                     } else if emphasizesLeadingEdge, filledWidth > 2 {
-                        HardwareProgressShimmer(color: color)
+                        HardwareProgressShimmer(color: color, paused: flowEffectsPaused)
                     }
                 }
                     .frame(width: filledWidth)

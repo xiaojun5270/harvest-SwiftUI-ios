@@ -2283,13 +2283,16 @@ struct DownloadsView: View {
             }
         }
         .task {
+            if model.isLoading { await model.load(appState) }
+            guard !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .milliseconds(180)) }
+            catch { return }
             model.startWatching(
                 appState,
                 enabled: refreshEnabled,
                 interval: refreshInterval,
                 duration: refreshDuration
             )
-            if model.isLoading { await model.load(appState) }
         }
         .onDisappear { model.stopWatching() }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }

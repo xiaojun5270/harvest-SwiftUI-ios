@@ -682,6 +682,7 @@ final class SitesViewModel: ObservableObject {
     }
 
     private var preparedSessionGeneration: Int?
+    private var lastNetworkRefreshAt: Date?
 
     func prepareForSessionLoad(_ generation: Int, server: String) {
         guard preparedSessionGeneration != generation else { return }
@@ -695,6 +696,7 @@ final class SitesViewModel: ObservableObject {
         pullRefreshSettleTask?.cancel()
         pullRefreshSettleTask = nil
         isPullRefreshSettling = false
+        lastNetworkRefreshAt = nil
         backgroundRefreshGeneration &+= 1
         networkRefreshInProgress = false
         loadInProgress = false
@@ -718,6 +720,19 @@ final class SitesViewModel: ObservableObject {
         isLoading = false
         didRestoreCache = true
         recordAppLog(.info, "站点页面已恢复本地快照（\(snapshot.rows.count) 个站点）")
+    }
+
+    func loadOnAppear(_ appState: AppState) async {
+        if !sites.isEmpty,
+           let lastNetworkRefreshAt,
+           Date().timeIntervalSince(lastNetworkRefreshAt) < 60 {
+            return
+        }
+        if !sites.isEmpty {
+            do { try await Task.sleep(for: .milliseconds(180)) }
+            catch { return }
+        }
+        await load(appState, background: true)
     }
 
     func clearFilters() {
@@ -1097,6 +1112,7 @@ final class SitesViewModel: ObservableObject {
                 configTask?.cancel()
                 return
             }
+            lastNetworkRefreshAt = Date()
             let refreshedSites = jsonRows(raw).map(SiteItem.init)
             refreshLog("收到站点数据（\(refreshedSites.count) 个）")
             if refreshedSites.isEmpty, !sites.isEmpty, cached {
@@ -1692,6 +1708,7 @@ private enum SitesContentSection: String, CaseIterable, Identifiable {
 struct SitesView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openURL) private var openURL
+    @Environment(\.harvestFlowEffectsPaused) private var parentFlowEffectsPaused
     @StateObject private var model = SitesViewModel()
     @StateObject private var telegramController = TelegramSessionController.shared
     @StateObject private var telegramStore = TelegramCheckinStore.shared
@@ -1709,6 +1726,7 @@ struct SitesView: View {
     @State private var deletingSite: SiteItem?
     @State private var repeatingSite: SiteItem?
     @State private var isRunningGlobalAction = false
+    @State private var isVisible = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1809,7 +1827,10 @@ struct SitesView: View {
                         .scrollDismissesKeyboard(.immediately)
                         .scrollContentBackground(.hidden)
                         .background(Color(uiColor: .systemGroupedBackground))
-                        .environment(\.harvestFlowEffectsPaused, model.isPullRefreshSettling)
+                        .environment(
+                            \.harvestFlowEffectsPaused,
+                            parentFlowEffectsPaused || model.isPullRefreshSettling
+                        )
                         .refreshable { await model.pullToRefresh(appState) }
                     }
                 }
@@ -1823,14 +1844,19 @@ struct SitesView: View {
         // Always run the cache-first load for this session so a late session
         // callback cannot leave the page stuck on the initial synchronizing view.
         .onAppear {
+            isVisible = true
             telegramController.configureNotificationForwarding(appState)
         }
+        .onDisappear { isVisible = false }
         .task(id: appState.sessionGeneration) {
             telegramController.configureNotificationForwarding(appState)
             model.prepareForSessionLoad(appState.sessionGeneration, server: appState.baseURL)
-            await model.load(appState, background: true)
+            await model.loadOnAppear(appState)
         }
-        .onChange(of: appState.refreshGeneration) { _, _ in Task { await model.load(appState, background: true) } }
+        .onChange(of: appState.refreshGeneration) { _, _ in
+            guard isVisible else { return }
+            Task { await model.load(appState, background: true) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .harvestLocalUIReset)) { _ in
             model.query = ""
             model.resetFilters()
@@ -4228,7 +4254,8 @@ private struct SiteMetricIcon: View {
             icon: icon,
             color: color,
             size: size,
-            usesSolidFill: prominent
+            usesSolidFill: prominent,
+            showsFlowEffect: prominent
         )
     }
 }

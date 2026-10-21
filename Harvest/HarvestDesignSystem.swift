@@ -157,6 +157,7 @@ extension View {
 
 struct HarvestSkeletonCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.harvestFlowEffectsPaused) private var flowEffectsPaused
     var rows = 3
 
     var body: some View {
@@ -177,7 +178,10 @@ struct HarvestSkeletonCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .harvestCard(.compact)
         .overlay {
-            HardwareProgressShimmer(color: HarvestTheme.blue, paused: reduceMotion)
+            HardwareProgressShimmer(
+                color: HarvestTheme.blue,
+                paused: reduceMotion || flowEffectsPaused
+            )
                 .clipShape(
                     RoundedRectangle(
                         cornerRadius: HarvestDesignSystem.Radius.card,
