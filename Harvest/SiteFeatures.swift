@@ -682,7 +682,7 @@ final class SitesViewModel: ObservableObject {
     }
 
     private var preparedSessionGeneration: Int?
-    private var lastNetworkRefreshAt: Date?
+    private var didLoadOnAppear = false
 
     func prepareForSessionLoad(_ generation: Int, server: String) {
         guard preparedSessionGeneration != generation else { return }
@@ -696,7 +696,7 @@ final class SitesViewModel: ObservableObject {
         pullRefreshSettleTask?.cancel()
         pullRefreshSettleTask = nil
         isPullRefreshSettling = false
-        lastNetworkRefreshAt = nil
+        didLoadOnAppear = false
         backgroundRefreshGeneration &+= 1
         networkRefreshInProgress = false
         loadInProgress = false
@@ -723,14 +723,10 @@ final class SitesViewModel: ObservableObject {
     }
 
     func loadOnAppear(_ appState: AppState) async {
-        if !sites.isEmpty,
-           let lastNetworkRefreshAt,
-           Date().timeIntervalSince(lastNetworkRefreshAt) < 60 {
-            return
-        }
-        if !sites.isEmpty {
-            do { try await Task.sleep(for: .milliseconds(180)) }
-            catch { return }
+        guard !didLoadOnAppear else { return }
+        didLoadOnAppear = true
+        defer {
+            if Task.isCancelled { didLoadOnAppear = false }
         }
         await load(appState, background: true)
     }
@@ -1112,7 +1108,6 @@ final class SitesViewModel: ObservableObject {
                 configTask?.cancel()
                 return
             }
-            lastNetworkRefreshAt = Date()
             let refreshedSites = jsonRows(raw).map(SiteItem.init)
             refreshLog("收到站点数据（\(refreshedSites.count) 个）")
             if refreshedSites.isEmpty, !sites.isEmpty, cached {

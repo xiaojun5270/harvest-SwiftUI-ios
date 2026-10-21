@@ -757,18 +757,15 @@ final class DashboardViewModel: ObservableObject {
     private var downloaderSpeedTask: Task<Void, Never>?
     private var downloaderSpeedMonitoring = false
     private var downloaders: [DownloaderItem] = []
+    private var didLoadOnAppear = false
 
     var hasDisplayableData: Bool { snapshot.hasDisplayableData }
 
     func loadOnAppear(_ appState: AppState, days: Int) async {
-        if hasDisplayableData,
-           let lastUpdated,
-           Date().timeIntervalSince(lastUpdated) < 60 {
-            return
-        }
-        if hasDisplayableData {
-            do { try await Task.sleep(for: .milliseconds(180)) }
-            catch { return }
+        guard !didLoadOnAppear else { return }
+        didLoadOnAppear = true
+        defer {
+            if Task.isCancelled { didLoadOnAppear = false }
         }
         await load(appState, days: days)
     }
