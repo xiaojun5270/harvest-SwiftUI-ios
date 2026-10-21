@@ -1735,7 +1735,14 @@ struct SitesView: View {
                     openAdd: { showAdd = true },
                     openImport: { showImport = true },
                     openGenerator: { showGenerator = true },
-                    openTimeline: { showTimeline = true }
+                    openTimeline: { showTimeline = true },
+                    refreshAll: {
+                        Task { await runGlobalAction(APIPath.siteStatus) }
+                    },
+                    signAll: {
+                        Task { await runGlobalAction(APIPath.siteSign) }
+                    },
+                    isRunningGlobalAction: isRunningGlobalAction
                 )
                 Group {
                     // Keep cached rows visible while a background refresh is in flight.
@@ -1812,28 +1819,6 @@ struct SitesView: View {
         }
         .navigationTitle("站点")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if selectedSection == .sites {
-                    Menu {
-                        Button { Task { await runGlobalAction(APIPath.siteStatus) } } label: {
-                            Label("刷新全部站点", systemImage: "arrow.clockwise")
-                        }
-                        Button { Task { await runGlobalAction(APIPath.siteSign) } } label: {
-                            Label("全部站点签到", systemImage: "checkmark.seal")
-                        }
-                    } label: {
-                        if isRunningGlobalAction {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                        }
-                    }
-                    .disabled(isRunningGlobalAction)
-                    .accessibilityLabel("批量站点操作")
-                }
-            }
-        }
         // The shell may be created before the stored session finishes restoring.
         // Always run the cache-first load for this session so a late session
         // callback cannot leave the page stuck on the initial synchronizing view.
@@ -2016,10 +2001,13 @@ private struct SiteSearchFilterBar: View {
     let openImport: () -> Void
     let openGenerator: () -> Void
     let openTimeline: () -> Void
+    let refreshAll: () -> Void
+    let signAll: () -> Void
+    let isRunningGlobalAction: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
+            HStack(spacing: HarvestDesignSystem.Spacing.xs) {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -2037,89 +2025,14 @@ private struct SiteSearchFilterBar: View {
                         .accessibilityLabel("清除搜索")
                     }
                 }
-                .padding(.horizontal, 9)
-                .frame(minHeight: 32)
-                .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, HarvestDesignSystem.Spacing.sm)
+                .frame(minHeight: 38)
+                .background(
+                    Color(uiColor: .tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+                )
 
-                Menu {
-                    Section("排序维度") {
-                        ForEach(SiteSortField.allCases) { field in
-                            Button {
-                                model.setSortField(field)
-                            } label: {
-                                if model.sortField == field {
-                                    Label(field.rawValue, systemImage: "checkmark")
-                                } else {
-                                    Label(field.rawValue, systemImage: field.icon)
-                                }
-                            }
-                        }
-                    }
-                    Button {
-                        model.ascending.toggle()
-                    } label: {
-                        Label(
-                            model.ascending ? "改为降序" : "改为升序",
-                            systemImage: model.ascending ? "arrow.down" : "arrow.up"
-                        )
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(model.sortField.rawValue)
-                            .lineLimit(1)
-                        Image(systemName: model.ascending ? "arrow.up" : "arrow.down")
-                    }
-                    .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .tint(HarvestTheme.blue)
-                .accessibilityLabel("排序：\(model.sortField.rawValue)，\(model.ascending ? "升序" : "降序")")
-
-                Button(action: openFilters) {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: model.hasFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 15, weight: .semibold))
-                        if model.activeFilterCount > 0 {
-                            Text("\(min(model.activeFilterCount, 99))")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(minWidth: 13, minHeight: 13)
-                                .background(HarvestTheme.coral, in: Circle())
-                                .offset(x: 6, y: -6)
-                        }
-                    }
-                    .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
-                .tint(model.hasFilters ? HarvestTheme.blue : .secondary)
-                .accessibilityLabel("筛选，已启用 \(model.activeFilterCount) 项")
-
-                Menu {
-                    Button(action: openAdd) {
-                        Label("添加站点", systemImage: "plus")
-                    }
-                    Button(action: openImport) {
-                        Label("上传配置", systemImage: "square.and.arrow.up")
-                    }
-                    Button(action: openGenerator) {
-                        Label("生成配置", systemImage: "doc.badge.gearshape")
-                    }
-                    Button(action: openTimeline) {
-                        Label("站点时间轴", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
-                .accessibilityLabel("新增与配置")
+                siteToolbar
             }
             .padding(.horizontal, 12)
             .padding(.top, 4)
@@ -2161,6 +2074,143 @@ private struct SiteSearchFilterBar: View {
         }
         .background(Color(uiColor: .secondarySystemBackground))
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var siteToolbar: some View {
+        HStack(spacing: 0) {
+            sortMenu
+            toolDivider
+            filterButton
+            toolDivider
+            addMenu
+        }
+        .frame(height: 38)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+                .stroke(Color.primary.opacity(0.09), lineWidth: HarvestDesignSystem.Layout.hairline)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Section("排序维度") {
+                ForEach(SiteSortField.allCases) { field in
+                    Button {
+                        model.setSortField(field)
+                    } label: {
+                        if model.sortField == field {
+                            Label(field.rawValue, systemImage: "checkmark")
+                        } else {
+                            Label(field.rawValue, systemImage: field.icon)
+                        }
+                    }
+                }
+            }
+            Button {
+                model.ascending.toggle()
+            } label: {
+                Label(
+                    model.ascending ? "改为降序" : "改为升序",
+                    systemImage: model.ascending ? "arrow.down" : "arrow.up"
+                )
+            }
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 15, weight: .semibold))
+                Image(systemName: model.ascending ? "arrow.up" : "arrow.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 13, height: 13)
+                    .background(HarvestTheme.blue, in: Circle())
+                    .offset(x: -2, y: -2)
+            }
+            .frame(width: 38, height: 38)
+            .foregroundStyle(HarvestTheme.blue)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("排序：\(model.sortField.rawValue)，\(model.ascending ? "升序" : "降序")")
+        .help("排序")
+    }
+
+    private var filterButton: some View {
+        Button(action: openFilters) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(HarvestTheme.blue)
+                if model.activeFilterCount > 0 {
+                    Text("\(min(model.activeFilterCount, 99))")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 13, minHeight: 13)
+                        .background(HarvestTheme.coral, in: Circle())
+                        .offset(x: -2, y: 2)
+                }
+            }
+            .frame(width: 38, height: 38)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("筛选，已启用 \(model.activeFilterCount) 项")
+        .help("筛选")
+    }
+
+    private var addMenu: some View {
+        Menu {
+            Section("站点配置") {
+                Button(action: openAdd) {
+                    Label("添加站点", systemImage: "plus")
+                }
+                Button(action: openImport) {
+                    Label("上传配置", systemImage: "square.and.arrow.up")
+                }
+                Button(action: openGenerator) {
+                    Label("生成配置", systemImage: "doc.badge.gearshape")
+                }
+                Button(action: openTimeline) {
+                    Label("站点时间轴", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                }
+            }
+            Section("批量操作") {
+                Button(action: refreshAll) {
+                    Label("刷新全部站点", systemImage: "arrow.clockwise")
+                }
+                .disabled(isRunningGlobalAction)
+                Button(action: signAll) {
+                    Label("全部站点签到", systemImage: "checkmark.seal")
+                }
+                .disabled(isRunningGlobalAction)
+            }
+        } label: {
+            Group {
+                if isRunningGlobalAction {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(HarvestTheme.blue)
+                }
+            }
+            .frame(width: 38, height: 38)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("站点配置与批量操作")
+        .help("站点操作")
+    }
+
+    private var toolDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(width: 1, height: 20)
+            .accessibilityHidden(true)
     }
 
     private var showsFilterTokens: Bool {
@@ -3939,21 +3989,21 @@ struct SiteRow: View {
 
     private var coreMetrics: some View {
         LazyVGrid(columns: metricColumns, spacing: 5) {
-            SiteCardMetric(icon: "leaf.fill", label: "做种", value: "\(site.seeding)", color: HarvestTheme.green)
-            SiteCardMetric(icon: "arrow.down.circle.fill", label: "下载中", value: "\(site.leeching)", color: HarvestTheme.blue)
-            SiteCardMetric(icon: "bolt.fill", label: "魔力", value: wanMetricText(site.magic), color: HarvestTheme.amber)
-            SiteCardMetric(icon: "diamond.fill", label: "积分", value: wanMetricText(site.score), color: HarvestTheme.coral)
+            SiteCardMetric(icon: "leaf.fill", label: "做种", value: "\(site.seeding)", color: HarvestDesignSystem.Palette.siteActivity)
+            SiteCardMetric(icon: "arrow.down.circle.fill", label: "下载中", value: "\(site.leeching)", color: HarvestDesignSystem.Palette.siteTransfer)
+            SiteCardMetric(icon: "bolt.fill", label: "魔力", value: wanMetricText(site.magic), color: HarvestDesignSystem.Palette.siteValue)
+            SiteCardMetric(icon: "diamond.fill", label: "积分", value: wanMetricText(site.score), color: HarvestDesignSystem.Palette.siteValue)
             SiteCardMetric(icon: "arrow.triangle.2.circlepath", label: "分享率", value: ratioText, color: ratioColor)
-            SiteCardMetric(icon: "timer", label: "时魔", value: integerMetricText(site.bonusHour), color: HarvestTheme.purple)
-            SiteCardMetric(icon: "paperplane.fill", label: "发种", value: "\(site.published)", color: HarvestTheme.orange)
-            SiteCardMetric(icon: "externaldrive.fill", label: "做种量", value: formatBytes(site.seedVolume), color: HarvestTheme.indigo)
+            SiteCardMetric(icon: "timer", label: "时魔", value: integerMetricText(site.bonusHour), color: HarvestDesignSystem.Palette.siteSecondary)
+            SiteCardMetric(icon: "paperplane.fill", label: "发种", value: "\(site.published)", color: HarvestDesignSystem.Palette.siteActivity)
+            SiteCardMetric(icon: "externaldrive.fill", label: "做种量", value: formatBytes(site.seedVolume), color: HarvestDesignSystem.Palette.siteTransfer)
         }
         .padding(.horizontal, 5)
         .padding(.vertical, 7)
-        .background(HarvestTheme.blue.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.primary.opacity(0.022), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(HarvestTheme.blue.opacity(0.09), lineWidth: 0.75)
+                .stroke(Color.primary.opacity(0.065), lineWidth: 0.75)
         }
     }
 
@@ -3964,7 +4014,7 @@ struct SiteRow: View {
                     icon: "clock.arrow.circlepath",
                     label: "最近时间",
                     value: recentTimeText(relativeTo: context.date),
-                    color: HarvestTheme.green
+                    color: HarvestDesignSystem.Palette.siteActivity
                 )
                 if hasHRContent {
                     SiteHeaderCompactMetric(
@@ -3980,10 +4030,10 @@ struct SiteRow: View {
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 7)
-        .background(HarvestTheme.green.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.primary.opacity(0.022), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(HarvestTheme.green.opacity(0.09), lineWidth: 0.75)
+                .stroke(Color.primary.opacity(0.065), lineWidth: 0.75)
         }
     }
 
@@ -4186,12 +4236,14 @@ private struct SiteMetricIcon: View {
     let icon: String
     let color: Color
     let size: CGFloat
+    var prominent = false
 
     var body: some View {
         FlowingSymbolBadge(
             icon: icon,
             color: color,
-            size: size
+            size: size,
+            usesSolidFill: prominent
         )
     }
 }
@@ -4205,7 +4257,7 @@ private struct SiteTrafficMetric: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            SiteMetricIcon(icon: icon, color: color, size: 32)
+            SiteMetricIcon(icon: icon, color: color, size: 32, prominent: true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.caption)

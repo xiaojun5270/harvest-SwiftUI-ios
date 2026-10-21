@@ -93,9 +93,15 @@ struct DownloaderItem: Identifiable {
         main = json.bool("main", "is_main", "default") ?? false
         uploadSpeed = status.double("uploadSpeed", "upload_speed", "up_info_speed") ?? 0
         downloadSpeed = status.double("downloadSpeed", "download_speed", "dl_info_speed") ?? 0
-        activeTorrentCount = status.int("activeTorrentCount") ?? 0
-        pausedTorrentCount = status.int("pausedTorrentCount") ?? 0
-        totalTorrentCount = status.int("torrentCount", "torrent_count") ?? 0
+        activeTorrentCount = downloaderMetricInt(status, keys: downloaderActiveCountKeys)
+            ?? downloaderMetricInt(json, keys: downloaderActiveCountKeys)
+            ?? 0
+        pausedTorrentCount = downloaderMetricInt(status, keys: downloaderPausedCountKeys)
+            ?? downloaderMetricInt(json, keys: downloaderPausedCountKeys)
+            ?? 0
+        totalTorrentCount = downloaderMetricInt(status, keys: downloaderTotalCountKeys)
+            ?? downloaderMetricInt(json, keys: downloaderTotalCountKeys)
+            ?? 0
         freeSpace = downloaderFreeSpace(status) ?? downloaderFreeSpace(preferences) ?? 0
         if downloaderIsTransmission(categoryValue) {
             uploadedSession = currentStats.double("uploadedBytes", "uploaded_bytes") ?? 0
@@ -172,16 +178,18 @@ private func downloaderDisplayAddress(_ downloader: DownloaderItem) -> String {
 }
 
 private let downloaderActiveCountKeys = [
-    "activeTorrentCount", "active_torrent_count", "activeTorrents", "active_torrents", "active_count"
+    "activeTorrentCount", "active_torrent_count", "activeTorrents", "active_torrents",
+    "active_count", "activeCount"
 ]
 
 private let downloaderPausedCountKeys = [
-    "pausedTorrentCount", "paused_torrent_count", "pausedTorrents", "paused_torrents", "paused_count"
+    "pausedTorrentCount", "paused_torrent_count", "pausedTorrents", "paused_torrents",
+    "paused_count", "pausedCount", "stoppedTorrentCount", "stopped_torrent_count"
 ]
 
 private let downloaderTotalCountKeys = [
     "torrentCount", "torrent_count", "totalTorrentCount", "total_torrent_count", "totalTorrents",
-    "total_torrents", "torrents_count"
+    "total_torrents", "torrents_count", "torrentTotal", "torrent_total", "total_count"
 ]
 
 private func downloaderMetricInt(
@@ -193,7 +201,7 @@ private func downloaderMetricInt(
     for key in keys {
         if let value = dictionary.int(key) { return value }
     }
-    for key in ["data", "result", "info", "status", "server_state", "serverState"] {
+    for key in ["data", "result", "info", "status", "server_state", "serverState", "current-stats", "currentStats"] {
         guard let nested = dictionary.dict(key),
               let value = downloaderMetricInt(nested, keys: keys, depth: depth + 1) else { continue }
         return value
@@ -534,71 +542,6 @@ private func torrentStatusCode(_ item: TorrentItem) -> Int {
     }
 }
 
-private struct DownloaderTorrentSummary: Sendable {
-    let active: Int
-    let paused: Int
-    let total: Int
-}
-
-private func downloaderTorrentRows(_ value: Any, depth: Int = 0) -> [[String: Any]] {
-    guard depth < 6 else { return [] }
-    if let rows = value as? [[String: Any]] { return rows }
-    guard let dictionary = jsonDictionary(value) else { return [] }
-
-    for key in ["torrents", "items", "list", "rows"] {
-        if let rows = dictionary[key] as? [[String: Any]] { return rows }
-        if let keyedRows = dictionary[key] as? [String: Any] {
-            let rows = keyedRows.compactMap { key, value -> [String: Any]? in
-                guard var row = value as? [String: Any] else { return nil }
-                if row["hash"] == nil && row["hashString"] == nil { row["hash"] = key }
-                return row
-            }
-            if !rows.isEmpty { return rows }
-        }
-    }
-    for key in ["data", "result"] {
-        guard let nested = dictionary[key] else { continue }
-        let rows = downloaderTorrentRows(nested, depth: depth + 1)
-        if !rows.isEmpty { return rows }
-    }
-    return jsonRows(value).filter { row in
-        row.string("hashString", "hash_string", "hash", "name", "title") != nil
-            || row.string("state", "status") != nil
-    }
-}
-
-private func downloaderTorrentSummary(_ value: Any, category: String) -> DownloaderTorrentSummary {
-    let root = jsonDictionary(value) ?? [:]
-    let rows = downloaderTorrentRows(value)
-    let derivedActive = rows.reduce(into: 0) { count, row in
-        let downloadSpeed = row.double("rateDownload", "dlspeed", "download_speed", "rate_download") ?? 0
-        let uploadSpeed = row.double("rateUpload", "upspeed", "upload_speed", "rate_upload") ?? 0
-        if downloadSpeed > 0 || uploadSpeed > 0 { count += 1 }
-    }
-    let derivedPaused = rows.reduce(into: 0) { count, row in
-        let state = row.string("state", "status")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if downloaderIsTransmission(category) {
-            if Int(state) == 0 { count += 1 }
-        } else if state.contains("pause") || state.contains("stop") || state.contains("暂停") || state.contains("停止") {
-            count += 1
-        }
-    }
-    let reportedTotal = max(0, downloaderMetricInt(root, keys: downloaderTotalCountKeys) ?? 0)
-    let total = max(reportedTotal, rows.count)
-    let rowsAreComplete = !rows.isEmpty && (reportedTotal == 0 || rows.count >= reportedTotal)
-    let reportedActive = max(0, downloaderMetricInt(root, keys: downloaderActiveCountKeys) ?? 0)
-    let reportedPaused = max(0, downloaderMetricInt(root, keys: downloaderPausedCountKeys) ?? 0)
-    let activeCandidate = downloaderIsTransmission(category) && rowsAreComplete
-        ? derivedActive
-        : max(reportedActive, derivedActive)
-    let active = total > 0 ? min(activeCandidate, total) : activeCandidate
-    let pausedCandidate = downloaderIsTransmission(category) && rowsAreComplete
-        ? derivedPaused
-        : max(reportedPaused, derivedPaused)
-    let paused = total > 0 ? min(pausedCandidate, total) : pausedCandidate
-    return DownloaderTorrentSummary(active: active, paused: paused, total: total)
-}
-
 private func compareTorrentValues<T: Comparable>(_ left: T, _ right: T) -> Int {
     left == right ? 0 : (left < right ? -1 : 1)
 }
@@ -663,6 +606,10 @@ private struct TorrentMetadataResult: @unchecked Sendable {
     let tags: [String]
     let sites: [String]
     let siteLabels: [String: String]
+}
+
+private struct DownloaderSpeedEventSnapshot: @unchecked Sendable {
+    let event: [String: Any]?
 }
 
 private struct TorrentFilterCriteria: @unchecked Sendable {
@@ -870,10 +817,10 @@ final class DownloadsViewModel: ObservableObject {
     private var downloaderWatchTokens: [Int: UUID] = [:]
     private var downloaderWatchSignatures: [Int: String] = [:]
     private var torrentSnapshotSignatures: [Int: Int] = [:]
-    private var liveSpeedDownloaderIDs: Set<Int> = []
+    private var latestDownloaderSpeedValues: [String: [String: Any]] = [:]
     private var countdownTask: Task<Void, Never>?
     private var cacheWriteTask: Task<Void, Never>?
-    private var compactSummaryTask: Task<Void, Never>?
+    private var statusBootstrapTask: Task<Void, Never>?
     private var filterRebuildTask: Task<Void, Never>?
     private var metadataRebuildTask: Task<Void, Never>?
     private var filterRebuildGeneration = 0
@@ -900,7 +847,7 @@ final class DownloadsViewModel: ObservableObject {
         downloaderWatchTasks.values.forEach { $0.cancel() }
         countdownTask?.cancel()
         cacheWriteTask?.cancel()
-        compactSummaryTask?.cancel()
+        statusBootstrapTask?.cancel()
         filterRebuildTask?.cancel()
         metadataRebuildTask?.cancel()
     }
@@ -1070,16 +1017,13 @@ final class DownloadsViewModel: ObservableObject {
 
     func load(_ appState: AppState) async {
         await restoreCacheIfNeeded(appState)
+        applyLatestDownloaderSpeedValues(appState: appState)
         isLoading = downloaders.isEmpty && torrents.isEmpty
         defer {
             isLoading = false
             reconcileWatching(appState)
         }
         do {
-            if !includesTorrentData {
-                compactSummaryTask?.cancel()
-                compactSummaryTask = nil
-            }
             let previousDownloaders = downloaders
             let raw = try await appState.api(
                 APIPath.downloaders,
@@ -1090,12 +1034,13 @@ final class DownloadsViewModel: ObservableObject {
                 jsonRows(raw).map(DownloaderItem.init),
                 previous: previousDownloaders
             )
+            applyLatestDownloaderSpeedValues(appState: appState)
             // The compact downloads screen only needs aggregate downloader status.
             guard includesTorrentData else {
                 torrents = []
                 sites = []
-                await persistCache(appState)
-                scheduleCompactSummaryRefresh(appState)
+                scheduleCachePersistence(appState)
+                if !isWatching { scheduleStatusBootstrap(appState) }
                 return
             }
             let previousTorrents = torrents
@@ -1207,104 +1152,10 @@ final class DownloadsViewModel: ObservableObject {
         }
     }
 
-    private func scheduleCompactSummaryRefresh(_ appState: AppState) {
-        compactSummaryTask?.cancel()
-        compactSummaryTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(900)) }
-            catch { return }
-            guard let self, !Task.isCancelled else { return }
-            let summaries = await self.downloaderTorrentSummaries(appState, items: self.downloaders)
-            guard !Task.isCancelled else { return }
-            var changed = false
-            let refreshed = self.downloaders.map { item in
-                guard let summary = summaries[item.id],
-                      !self.liveSpeedDownloaderIDs.contains(item.id) else { return item }
-                let merged = mergingDownloaderStatus([
-                    "activeTorrentCount": summary.active,
-                    "pausedTorrentCount": summary.paused,
-                    "torrentCount": summary.total
-                ], into: item.raw)
-                let next = DownloaderItem(merged)
-                if next.activeTorrentCount != item.activeTorrentCount
-                    || next.pausedTorrentCount != item.pausedTorrentCount
-                    || next.totalTorrentCount != item.totalTorrentCount {
-                    changed = true
-                }
-                return next
-            }
-            if changed {
-                self.downloaders = refreshed
-                self.usingCachedData = false
-                self.cachedAt = nil
-                await self.persistCache(appState)
-            }
-            self.compactSummaryTask = nil
-        }
-    }
-
-    private func downloaderTorrentSummaries(
-        _ appState: AppState,
-        items: [DownloaderItem]
-    ) async -> [Int: DownloaderTorrentSummary] {
-        let candidates = items.filter { item in
-            let isTransmission = downloaderIsTransmission(item.category)
-            return item.enabled && (
-                isTransmission || !item.hasLiveStatus
-                    || item.totalTorrentCount == 0
-                    || (item.activeTorrentCount == 0 && (item.downloadSpeed > 0 || item.uploadSpeed > 0))
-                    || downloaderMetricInt(item.raw, keys: downloaderTotalCountKeys) == nil
-                    || downloaderMetricInt(item.raw, keys: downloaderActiveCountKeys) == nil
-                    || downloaderMetricInt(item.raw, keys: downloaderPausedCountKeys) == nil
-            )
-        }
-        guard !candidates.isEmpty else { return [:] }
-
-        let responses = await withTaskGroup(of: (Int, DownloaderTorrentSummary?).self) { group in
-            for downloader in candidates {
-                let id = downloader.id
-                let category = downloader.category
-                group.addTask {
-                    do {
-                        let value = try await appState.api(
-                            "\(APIPath.downloaderMain)\(id)",
-                            timeoutInterval: downloaderIsTransmission(category) ? 20 : 8
-                        )
-                        guard JSONSerialization.isValidJSONObject(value),
-                              let data = try? JSONSerialization.data(withJSONObject: value),
-                              let decoded = try? JSONSerialization.jsonObject(
-                                  with: data,
-                                  options: [.fragmentsAllowed]
-                              ) else {
-                            return (id, nil)
-                        }
-                        return (id, downloaderTorrentSummary(decoded, category: category))
-                    } catch {
-                        if !isRequestCancellation(error) {
-                            recordAppLog(.warning, "下载器 \(id) 种子统计读取失败：\(error.localizedDescription)")
-                        }
-                        return (id, nil)
-                    }
-                }
-            }
-            var values: [(Int, DownloaderTorrentSummary?)] = []
-            for await response in group { values.append(response) }
-            return values
-        }
-
-        var summaries: [Int: DownloaderTorrentSummary] = [:]
-        for (id, summary) in responses {
-            if let summary { summaries[id] = summary }
-        }
-        return summaries
-    }
-
     private func restoreCacheIfNeeded(_ appState: AppState) async {
         guard !restoredCache else { return }
         restoredCache = true
-        var cached = await appState.readSessionCache(sessionCacheKey)
-        if cached == nil, !includesTorrentData {
-            cached = await appState.readSessionCache("downloads.snapshot.v1")
-        }
+        let cached = await appState.readSessionCache(sessionCacheKey)
         guard let cached,
               let root = cached.value as? [String: Any] else { return }
         let cachedDownloaders = (root["downloaders"] as? [[String: Any]] ?? []).map(DownloaderItem.init)
@@ -1713,8 +1564,8 @@ final class DownloadsViewModel: ObservableObject {
 
     func stopWatching() {
         isViewActive = false
-        compactSummaryTask?.cancel()
-        compactSummaryTask = nil
+        statusBootstrapTask?.cancel()
+        statusBootstrapTask = nil
         stopActiveWatching(clearRemaining: true)
     }
 
@@ -1755,6 +1606,8 @@ final class DownloadsViewModel: ObservableObject {
     private func beginWatching(_ appState: AppState) {
         stopActiveWatching(clearRemaining: false)
         guard isViewActive, refreshEnabled, !refreshPaused else { return }
+        statusBootstrapTask?.cancel()
+        statusBootstrapTask = nil
         isWatching = true
         refreshDeadline = Date().addingTimeInterval(TimeInterval(refreshDuration * 60))
         reconcileWatching(appState)
@@ -1769,6 +1622,46 @@ final class DownloadsViewModel: ObservableObject {
         }
     }
 
+    private func scheduleStatusBootstrap(_ appState: AppState) {
+        guard statusBootstrapTask == nil, !isWatching else { return }
+        let baseURL = appState.baseURL
+        let token = appState.accessToken
+        let reference = WeakReference(self)
+        statusBootstrapTask = Task {
+            let event = await withTaskGroup(of: DownloaderSpeedEventSnapshot.self) { group in
+                group.addTask {
+                    do {
+                        let stream = APIClient.shared.streamWebSocket(
+                            baseURL: baseURL,
+                            path: APIPath.downloaderSpeed,
+                            token: token,
+                            subscription: ["interval": 1]
+                        )
+                        for try await event in stream {
+                            return DownloaderSpeedEventSnapshot(event: event)
+                        }
+                    } catch {
+                        if !isRequestCancellation(error) {
+                            recordAppLog(.warning, "下载器首帧状态读取失败：\(error.localizedDescription)")
+                        }
+                    }
+                    return DownloaderSpeedEventSnapshot(event: nil)
+                }
+                group.addTask {
+                    do { try await Task.sleep(for: .seconds(8)) }
+                    catch { return DownloaderSpeedEventSnapshot(event: nil) }
+                    return DownloaderSpeedEventSnapshot(event: nil)
+                }
+                let first = await group.next()?.event
+                group.cancelAll()
+                return first
+            }
+            guard let model = reference.value, !Task.isCancelled else { return }
+            if let event { model.applyDownloaderSpeedEvent(event, appState: appState) }
+            model.statusBootstrapTask = nil
+        }
+    }
+
     private func stopActiveWatching(clearRemaining: Bool) {
         isWatching = false
         countdownTask?.cancel()
@@ -1780,7 +1673,6 @@ final class DownloadsViewModel: ObservableObject {
         downloaderWatchTokens = [:]
         downloaderWatchSignatures = [:]
         torrentSnapshotSignatures = [:]
-        liveSpeedDownloaderIDs = []
         socketConnections = []
         if clearRemaining { refreshDeadline = nil }
     }
@@ -1880,29 +1772,78 @@ final class DownloadsViewModel: ObservableObject {
         guard !data.isEmpty else { return }
         var liveByKey: [String: [String: Any]] = [:]
         for (key, value) in data {
-            if let value = value as? [String: Any] { liveByKey[key.lowercased()] = value }
+            guard let value = value as? [String: Any] else { continue }
+            liveByKey[normalizedDownloaderLiveKey(key)] = value
+            let payload = value.dict("data") ?? value
+            if let id = payload.int("downloader_id", "downloaderId", "id"), id > 0 {
+                liveByKey[String(id)] = value
+            }
         }
+        guard !liveByKey.isEmpty else { return }
+        latestDownloaderSpeedValues = liveByKey
+        applyLatestDownloaderSpeedValues(appState: appState)
+    }
+
+    private func applyLatestDownloaderSpeedValues(appState: AppState) {
+        guard !latestDownloaderSpeedValues.isEmpty, !downloaders.isEmpty else { return }
         var updated = downloaders
         var changed = false
+        var matchedLiveStatus = false
         for index in updated.indices {
             let downloader = updated[index]
-            let websocketKey = "\(downloader.name)-\(downloader.id)-\(downloader.category)".lowercased()
-            guard let live = liveByKey[websocketKey] ?? liveByKey[String(downloader.id)] else { continue }
-            liveSpeedDownloaderIDs.insert(downloader.id)
+            guard let live = liveStatus(for: downloader) else { continue }
+            matchedLiveStatus = true
             var merged = downloader.raw
             merged["status"] = live
+            var preservedCounts: [String: Any] = [:]
+            if downloaderMetricInt(live, keys: downloaderActiveCountKeys) == nil,
+               downloaderMetricInt(downloader.raw, keys: downloaderActiveCountKeys) != nil {
+                preservedCounts["activeTorrentCount"] = downloader.activeTorrentCount
+            }
+            if downloaderMetricInt(live, keys: downloaderPausedCountKeys) == nil,
+               downloaderMetricInt(downloader.raw, keys: downloaderPausedCountKeys) != nil {
+                preservedCounts["pausedTorrentCount"] = downloader.pausedTorrentCount
+            }
+            if downloaderMetricInt(live, keys: downloaderTotalCountKeys) == nil,
+               downloaderMetricInt(downloader.raw, keys: downloaderTotalCountKeys) != nil {
+                preservedCounts["torrentCount"] = downloader.totalTorrentCount
+            }
+            if !preservedCounts.isEmpty {
+                merged = mergingDownloaderStatus(preservedCounts, into: merged)
+            }
             let next = DownloaderItem(merged)
             guard downloaderLiveSignature(next) != downloaderLiveSignature(downloader) else { continue }
             updated[index] = next
             changed = true
         }
-        guard changed else { return }
-        downloaders = updated
-        if !includesTorrentData {
+        if matchedLiveStatus, !includesTorrentData {
             usingCachedData = false
             cachedAt = nil
         }
+        guard changed else { return }
+        downloaders = updated
         scheduleCachePersistence(appState)
+    }
+
+    private func liveStatus(for downloader: DownloaderItem) -> [String: Any]? {
+        let categoryAliases = downloaderIsTransmission(downloader.category)
+            ? [downloader.category, "Tr", "Transmission"]
+            : [downloader.category, "Qb", "qBittorrent"]
+        var keys = categoryAliases.map {
+            normalizedDownloaderLiveKey("\(downloader.name)-\(downloader.id)-\($0)")
+        }
+        keys.append(String(downloader.id))
+        for key in keys {
+            if let value = latestDownloaderSpeedValues[key] { return value }
+        }
+        let idSegment = "-\(downloader.id)-"
+        return latestDownloaderSpeedValues.first { key, _ in
+            key.contains(idSegment)
+        }?.value
+    }
+
+    private func normalizedDownloaderLiveKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private static func watchDownloader(
@@ -2196,13 +2137,13 @@ struct DownloadsView: View {
             }
         }
         .task {
-            if model.isLoading { await model.load(appState) }
             model.startWatching(
                 appState,
                 enabled: refreshEnabled,
                 interval: refreshInterval,
                 duration: refreshDuration
             )
+            if model.isLoading { await model.load(appState) }
         }
         .onDisappear { model.stopWatching() }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }
@@ -3155,14 +3096,13 @@ struct TorrentListView: View {
         }
         .task {
             model.downloaderFilter = initialDownloader.id
-            await model.load(appState)
-            guard !Task.isCancelled else { return }
             model.startWatching(
                 appState,
                 enabled: refreshEnabled,
                 interval: refreshInterval,
                 duration: refreshDuration
             )
+            await model.load(appState)
         }
         .onDisappear { model.stopWatching() }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }

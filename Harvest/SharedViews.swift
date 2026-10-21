@@ -1908,7 +1908,7 @@ struct MainShellView: View {
             }
             .harvestNavigationChrome()
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(appState.selectedTab == 5 ? .hidden : .visible, for: .navigationBar)
+            .toolbar((appState.selectedTab == 1 || appState.selectedTab == 5) ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     BrandMark(size: 38)
@@ -2336,6 +2336,7 @@ struct FlowingSymbolBadge: View {
     let color: Color
     var size: CGFloat = 38
     var showsProgress = false
+    var usesSolidFill = true
 
     private var cornerRadius: CGFloat { max(5, size * 0.2) }
     private var glowLineWidth: CGFloat { max(1.15, size * 0.05) }
@@ -2352,25 +2353,25 @@ struct FlowingSymbolBadge: View {
     private var badge: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(color)
+                .fill(usesSolidFill ? color : color.opacity(0.11))
                 .padding(1.1)
 
             if showsProgress {
                 ProgressView()
-                    .tint(.white)
+                    .tint(usesSolidFill ? .white : color)
                     .controlSize(size >= 40 ? .regular : .small)
             } else {
                 Image(systemName: icon)
                     .font(.system(size: size * 0.4, weight: .semibold))
                     .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(usesSolidFill ? Color.white : color)
             }
 
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(color.opacity(0.24), lineWidth: 0.7)
+                .strokeBorder(color.opacity(usesSolidFill ? 0.24 : 0.18), lineWidth: 0.7)
 
             HardwareFlowingBorder(
-                color: color,
+                color: usesSolidFill ? color : color.opacity(0.58),
                 lineWidth: glowLineWidth,
                 cornerRadius: cornerRadius,
                 circular: false,
