@@ -2795,11 +2795,11 @@ struct EmptyState: View {
 
 struct LoadingState: View {
     var body: some View {
-        VStack(spacing: 12) {
-            ProgressView().tint(HarvestTheme.green)
-            Text("正在同步").font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: HarvestDesignSystem.Spacing.sm) {
+            HarvestSkeletonCard(rows: 2)
+            HarvestSkeletonCard(rows: 3)
         }
-        .frame(maxWidth: .infinity, minHeight: 180)
+        .frame(maxWidth: .infinity, minHeight: 180, alignment: .top)
     }
 }
 
@@ -2847,14 +2847,6 @@ extension View {
     }
 
     func cardSurface() -> some View {
-        self.padding(16)
-            .background(
-                Color(uiColor: .secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06))
-            )
+        harvestCard(.standard)
     }
 }

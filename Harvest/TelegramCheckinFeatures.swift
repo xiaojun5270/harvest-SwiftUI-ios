@@ -9,7 +9,6 @@ import UIKit
 enum TelegramBackgroundTaskConfiguration {
     static let identifier = "com.ptools.harvest.telegram-checkin"
 }
-
 enum TelegramCheckinRunStatus: String, Codable, CaseIterable {
     case idle
     case running
@@ -59,6 +58,62 @@ enum TelegramCheckinTrigger: String, Codable {
     case scheduled
 
     var label: String { self == .manual ? "手动" : "定时" }
+}
+
+enum TelegramCheckinStepKind: String, Codable {
+    case resolveBot
+    case sendCommand
+    case receiveResponse
+    case panelAction
+    case parseResult
+    case forwardNotification
+
+    var title: String {
+        switch self {
+        case .resolveBot: "定位 Bot"
+        case .sendCommand: "发出指令"
+        case .receiveResponse: "收到回复"
+        case .panelAction: "提交面板操作"
+        case .parseResult: "解析结果"
+        case .forwardNotification: "推送转接"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .resolveBot: "person.crop.circle.badge.checkmark"
+        case .sendCommand: "paperplane.fill"
+        case .receiveResponse: "bubble.left.and.text.bubble.right.fill"
+        case .panelAction: "rectangle.and.hand.point.up.left.fill"
+        case .parseResult: "checkmark.seal.fill"
+        case .forwardNotification: "bell.and.waves.left.and.right.fill"
+        }
+    }
+}
+
+struct TelegramCheckinStep: Codable, Identifiable, Equatable {
+    let id: UUID
+    let kind: TelegramCheckinStepKind
+    let status: TelegramCheckinRunStatus
+    let detail: String
+    let rawPayload: String
+    let createdAt: Foundation.Date
+
+    init(
+        id: UUID = UUID(),
+        kind: TelegramCheckinStepKind,
+        status: TelegramCheckinRunStatus,
+        detail: String,
+        rawPayload: String = "",
+        createdAt: Foundation.Date = Foundation.Date()
+    ) {
+        self.id = id
+        self.kind = kind
+        self.status = status
+        self.detail = detail
+        self.rawPayload = rawPayload
+        self.createdAt = createdAt
+    }
 }
 
 struct TelegramCheckinBot: Codable, Identifiable, Equatable {
@@ -151,6 +206,7 @@ struct TelegramCheckinHistory: Codable, Identifiable, Equatable {
     let createdAt: Foundation.Date
     let duration: TimeInterval
     let attemptCount: Int
+    let steps: [TelegramCheckinStep]?
 }
 
 struct TelegramCheckinCounter: Codable, Equatable {
@@ -311,7 +367,8 @@ final class TelegramCheckinStore: ObservableObject {
         status: TelegramCheckinRunStatus,
         response: String,
         startedAt: Foundation.Date,
-        attempts: Int
+        attempts: Int,
+        steps: [TelegramCheckinStep]
     ) -> TelegramCheckinHistory? {
         guard var bot = bot(id: id) else { return nil }
         let finishedAt = Foundation.Date()
@@ -331,7 +388,8 @@ final class TelegramCheckinStore: ObservableObject {
             response: response,
             createdAt: finishedAt,
             duration: max(0, finishedAt.timeIntervalSince(startedAt)),
-            attemptCount: attempts
+            attemptCount: attempts,
+            steps: steps
         )
         history.insert(record, at: 0)
         statistics.include(record)
@@ -697,13 +755,29 @@ final class TelegramSessionController: ObservableObject {
         TelegramCheckinStore.shared.beginRun(id: botID)
         defer { runningBotIDs.remove(botID) }
 
-        let result: (status: TelegramCheckinRunStatus, response: String, attempts: Int)
+        let result: (
+            status: TelegramCheckinRunStatus,
+            response: String,
+            attempts: Int,
+            steps: [TelegramCheckinStep]
+        )
         do {
             bot = TelegramCheckinStore.shared.bot(id: botID) ?? bot
             result = try await executeOnce(bot: bot, trigger: trigger, client: client)
         } catch {
             TelegramCheckinStore.shared.clearResolvedChat(id: botID)
-            result = (.failure, readableError(error), 1)
+            let message = readableError(error)
+            result = (
+                .failure,
+                message,
+                1,
+                [TelegramCheckinStep(
+                    kind: .resolveBot,
+                    status: .failure,
+                    detail: "无法连接 Bot",
+                    rawPayload: message
+                )]
+            )
         }
 
         guard let record = TelegramCheckinStore.shared.finishRun(
@@ -712,7 +786,8 @@ final class TelegramSessionController: ObservableObject {
             status: result.status,
             response: result.response,
             startedAt: startedAt,
-            attempts: result.attempts
+            attempts: result.attempts,
+            steps: result.steps
         ) else {
             throw TelegramCheckinError.botNotFound
         }
@@ -911,14 +986,32 @@ final class TelegramSessionController: ObservableObject {
         bot: TelegramCheckinBot,
         trigger: TelegramCheckinTrigger,
         client: TDLibClient
-    ) async throws -> (status: TelegramCheckinRunStatus, response: String, attempts: Int) {
+    ) async throws -> (
+        status: TelegramCheckinRunStatus,
+        response: String,
+        attempts: Int,
+        steps: [TelegramCheckinStep]
+    ) {
+        var steps: [TelegramCheckinStep] = []
         var chatID: Int64
         if let cached = bot.resolvedChatID {
             chatID = cached
+            steps.append(TelegramCheckinStep(
+                kind: .resolveBot,
+                status: .success,
+                detail: "使用已保存会话",
+                rawPayload: "chat_id: \(cached)"
+            ))
         } else {
             let chat = try await client.searchPublicChat(username: bot.normalizedUsername)
             chatID = chat.id
             TelegramCheckinStore.shared.cacheResolvedChat(id: bot.id, chatID: chat.id, title: chat.title)
+            steps.append(TelegramCheckinStep(
+                kind: .resolveBot,
+                status: .success,
+                detail: "已找到 @\(bot.normalizedUsername)",
+                rawPayload: "chat_id: \(chat.id)\ntitle: \(chat.title)"
+            ))
         }
 
         guard !bot.commands.isEmpty else {
@@ -928,16 +1021,33 @@ final class TelegramSessionController: ObservableObject {
         var responses: [String] = []
         var totalAttempts = 0
         for command in bot.commands {
-            var commandResult: (status: TelegramCheckinRunStatus, response: String)?
+            var commandResult: (
+                status: TelegramCheckinRunStatus,
+                response: String,
+                steps: [TelegramCheckinStep]
+            )?
+            var commandSteps: [TelegramCheckinStep] = []
             for attempt in 0...bot.retryCount {
                 totalAttempts += 1
                 do {
                     let current = try await executeCommand(command, bot: bot, chatID: chatID, client: client)
-                    commandResult = current
+                    commandSteps.append(contentsOf: current.steps)
+                    commandResult = (current.status, current.response, commandSteps)
                     if current.status != .timeout || attempt == bot.retryCount { break }
                 } catch {
                     if attempt == bot.retryCount {
-                        commandResult = (.failure, readableError(error))
+                        let message = readableError(error)
+                        commandSteps.append(TelegramCheckinStep(
+                            kind: .sendCommand,
+                            status: .failure,
+                            detail: "指令发送失败",
+                            rawPayload: "\(command)\n\(message)"
+                        ))
+                        commandResult = (
+                            .failure,
+                            message,
+                            commandSteps
+                        )
                         break
                     }
                     let chat = try await client.searchPublicChat(username: bot.normalizedUsername)
@@ -950,25 +1060,33 @@ final class TelegramSessionController: ObservableObject {
                 }
             }
             guard let commandResult else {
-                return (.failure, "命令 \(command) 执行失败", totalAttempts)
+                let message = "命令 \(command) 执行失败"
+                steps.append(TelegramCheckinStep(
+                    kind: .sendCommand,
+                    status: .failure,
+                    detail: message,
+                    rawPayload: command
+                ))
+                return (.failure, message, totalAttempts, steps)
             }
+            steps.append(contentsOf: commandResult.steps)
             responses.append(
                 bot.commands.count > 1 ? "\(command)：\(commandResult.response)" : commandResult.response
             )
             if commandResult.status == .failure || commandResult.status == .timeout {
-                return (commandResult.status, responses.joined(separator: "\n"), totalAttempts)
+                return (commandResult.status, responses.joined(separator: "\n"), totalAttempts, steps)
             }
             if commandResult.status == .success {
-                await forwardSuccessfulCheckin(
+                steps.append(await forwardSuccessfulCheckin(
                     bot: bot,
                     command: command,
                     response: commandResult.response,
                     trigger: trigger
-                )
+                ))
             }
             if commandResult.status == .unmatched { status = .unmatched }
         }
-        return (status, responses.joined(separator: "\n"), totalAttempts)
+        return (status, responses.joined(separator: "\n"), totalAttempts, steps)
     }
 
     private func executeCommand(
@@ -976,8 +1094,13 @@ final class TelegramSessionController: ObservableObject {
         bot: TelegramCheckinBot,
         chatID: Int64,
         client: TDLibClient
-    ) async throws -> (status: TelegramCheckinRunStatus, response: String) {
+    ) async throws -> (
+        status: TelegramCheckinRunStatus,
+        response: String,
+        steps: [TelegramCheckinStep]
+    ) {
         let startedAt = Foundation.Date()
+        var steps: [TelegramCheckinStep] = []
         let sentMessage: Message
         do {
             sentMessage = try await sendText(command, chatID: chatID, client: client)
@@ -987,6 +1110,12 @@ final class TelegramSessionController: ObservableObject {
             }
             throw error
         }
+        steps.append(TelegramCheckinStep(
+            kind: .sendCommand,
+            status: .success,
+            detail: command,
+            rawPayload: "message_id: \(sentMessage.id)\ncommand: \(command)"
+        ))
 
         guard var response = await waitForResponse(
             chatID: chatID,
@@ -994,29 +1123,70 @@ final class TelegramSessionController: ObservableObject {
             startedAt: startedAt,
             timeoutSeconds: bot.timeoutSeconds
         ) else {
-            return (.timeout, "等待 Bot 回复超时")
+            let message = "等待 Bot 回复超时"
+            steps.append(TelegramCheckinStep(
+                kind: .receiveResponse,
+                status: .timeout,
+                detail: message
+            ))
+            return (.timeout, message, steps)
         }
 
+        steps.append(TelegramCheckinStep(
+            kind: .receiveResponse,
+            status: .success,
+            detail: response.replyMarkup == nil ? "收到 Bot 回复" : "收到交互面板",
+            rawPayload: response.text
+        ))
+
         if responseMatchesFailure(response.text, bot: bot) {
-            return (.failure, response.text)
+            steps.append(TelegramCheckinStep(
+                kind: .parseResult,
+                status: .failure,
+                detail: "命中失败关键字",
+                rawPayload: response.text
+            ))
+            return (.failure, response.text, steps)
         }
         if responseMatchesExplicitSuccess(response.text, bot: bot) {
-            return (.success, response.text)
+            steps.append(TelegramCheckinStep(
+                kind: .parseResult,
+                status: .success,
+                detail: "已识别签到成功",
+                rawPayload: response.text
+            ))
+            return (.success, response.text, steps)
         }
         if bot.pressesPanelButton, response.replyMarkup != nil {
             guard let action = panelAction(
                 from: response,
                 keywords: bot.effectivePanelButtonKeywords
             ) else {
-                return (
-                    .failure,
-                    "未找到面板按钮：\(bot.effectivePanelButtonKeywords.joined(separator: "、"))"
-                )
+                let message = "未找到面板按钮：\(bot.effectivePanelButtonKeywords.joined(separator: "、"))"
+                steps.append(TelegramCheckinStep(
+                    kind: .panelAction,
+                    status: .failure,
+                    detail: message,
+                    rawPayload: response.text
+                ))
+                return (.failure, message, steps)
             }
             switch action {
             case .unsupported(let title, let reason):
-                return (.failure, "无法点击「\(title)」：\(reason)")
+                let message = "无法点击「\(title)」：\(reason)"
+                steps.append(TelegramCheckinStep(
+                    kind: .panelAction,
+                    status: .failure,
+                    detail: message,
+                    rawPayload: response.text
+                ))
+                return (.failure, message, steps)
             case .sendText, .callback:
+                let actionTitle: String
+                switch action {
+                case .sendText(let title, _), .callback(let title, _, _): actionTitle = title
+                case .unsupported: actionTitle = ""
+                }
                 guard let panelResponse = try await performPanelAction(
                     action,
                     panelResponse: response,
@@ -1024,15 +1194,41 @@ final class TelegramSessionController: ObservableObject {
                     timeoutSeconds: bot.timeoutSeconds,
                     client: client
                 ) else {
-                    return (.timeout, "已点击面板按钮，但等待 Bot 最终回复超时")
+                    let message = "已点击面板按钮，但等待 Bot 最终回复超时"
+                    steps.append(TelegramCheckinStep(
+                        kind: .panelAction,
+                        status: .timeout,
+                        detail: "已提交「\(actionTitle)」",
+                        rawPayload: message
+                    ))
+                    return (.timeout, message, steps)
                 }
+                steps.append(TelegramCheckinStep(
+                    kind: .panelAction,
+                    status: .success,
+                    detail: "已提交「\(actionTitle)」",
+                    rawPayload: panelResponse.text
+                ))
                 response = panelResponse
             }
         }
         if response.text.hasPrefix("已点击面板按钮「") {
-            return (.unmatched, response.text)
+            steps.append(TelegramCheckinStep(
+                kind: .parseResult,
+                status: .unmatched,
+                detail: "面板操作已提交，未识别最终结果",
+                rawPayload: response.text
+            ))
+            return (.unmatched, response.text, steps)
         }
-        return evaluatedResult(response.text, bot: bot)
+        let evaluated = evaluatedResult(response.text, bot: bot)
+        steps.append(TelegramCheckinStep(
+            kind: .parseResult,
+            status: evaluated.status,
+            detail: evaluated.status == .success ? "已识别签到成功" : "已收到回复，未命中成功关键字",
+            rawPayload: evaluated.response
+        ))
+        return (evaluated.status, evaluated.response, steps)
     }
 
     private func evaluatedResult(
@@ -1078,10 +1274,15 @@ final class TelegramSessionController: ObservableObject {
         command: String,
         response: String,
         trigger: TelegramCheckinTrigger
-    ) async {
+    ) async -> TelegramCheckinStep {
         guard let appState = await authenticatedNotificationAppState() else {
-            recordAppLog(.warning, "TG 签到成功，但 Harvest 会话不可用，未转发企业微信")
-            return
+            let message = "Harvest 会话不可用，未转发企业微信"
+            recordAppLog(.warning, "TG 签到成功，但\(message)")
+            return TelegramCheckinStep(
+                kind: .forwardNotification,
+                status: .failure,
+                detail: message
+            )
         }
         let responseText = String(response.prefix(800))
         let content = """
@@ -1103,8 +1304,21 @@ final class TelegramSessionController: ObservableObject {
                 timeoutInterval: 15
             )
             recordAppLog(.info, "TG 签到成功消息已转发企业微信：\(bot.displayName)")
+            return TelegramCheckinStep(
+                kind: .forwardNotification,
+                status: .success,
+                detail: "企业微信通知已发送",
+                rawPayload: content
+            )
         } catch {
-            recordAppLog(.warning, "TG 签到成功消息转发企业微信失败：\(error.localizedDescription)")
+            let message = error.localizedDescription
+            recordAppLog(.warning, "TG 签到成功消息转发企业微信失败：\(message)")
+            return TelegramCheckinStep(
+                kind: .forwardNotification,
+                status: .failure,
+                detail: "企业微信通知发送失败",
+                rawPayload: message
+            )
         }
     }
 
@@ -2338,54 +2552,5 @@ private struct TelegramBotEditorSheet: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-    }
-}
-
-private struct TelegramBotHistorySheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let bot: TelegramCheckinBot
-    let records: [TelegramCheckinHistory]
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if records.isEmpty {
-                    ContentUnavailableView("暂无执行记录", systemImage: "clock.arrow.circlepath")
-                } else {
-                    List(records) { record in
-                        VStack(alignment: .leading, spacing: 7) {
-                            HStack {
-                                Label(record.status.label, systemImage: record.status.icon)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(record.status.color)
-                                Spacer()
-                                Text(record.trigger.label)
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(record.response)
-                                .font(.subheadline)
-                                .textSelection(.enabled)
-                            HStack {
-                                Text(record.createdAt.formatted(date: .abbreviated, time: .standard))
-                                Spacer()
-                                Text(String(format: "%.1f 秒 · %d 次", record.duration, record.attemptCount))
-                            }
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .listStyle(.plain)
-                }
-            }
-            .navigationTitle(bot.displayName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                }
-            }
-        }
     }
 }

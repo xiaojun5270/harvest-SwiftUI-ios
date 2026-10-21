@@ -7,7 +7,7 @@ Open `Harvest.xcodeproj` with Xcode 26 or later, choose a development team, and
 run the `Harvest` scheme. The backend API is shared with the Flutter client.
 
 The native target keeps the production bundle identifier `com.ptools.harvest`
-and uses version `2026.1013.02` with build `300`, so it can be signed as the next
+and uses version `2026.1021.01` with build `301`, so it can be signed as the next
 update of the existing iOS app. Do not install a Flutter and native archive with
 the same bundle identifier side by side.
 
@@ -16,6 +16,29 @@ the same bundle identifier side by side.
 后续每次代码修改完成后均同步更新此处，无论是否调整版本号。同一发布版本的
 改动持续追加到对应版本下，并按时间倒序排列；内容说明本次具体新增、修改、
 优化或修复了什么，不堆叠提交哈希和无意义的内部日志。
+
+### 2026.1021.01 (301) - 2026-10-21
+
+- 新增原生设计系统文件，统一颜色、间距、圆角、页面边距、卡片表面与动效时长；
+  现有 `HarvestTheme` 保持兼容，公共卡片已切换到统一令牌，避免页面样式继续漂移。
+- 首屏加载由单一转圈提示改为复用硬件加速 shimmer 的卡片骨架；手动刷新、签到和
+  管理操作的成功、失败、取消结果增加原生触觉反馈，不引入额外动画依赖。
+- 仪表盘核心卡片改为紧凑 Bento 信息区，集中展示今日上传/下载、站点数、下载中、
+  未读和实时上下行速度；服务器采样可用时直接显示双线微型速率波形，流量趋势图
+  支持拖动选择日期并查看对应上传、下载数据。
+- 站点异常卡片增加凭证提醒条以及编辑凭证、重试连接快捷入口；站点标签和类型筛选
+  改为两列选择芯片，保留原有筛选状态与接口逻辑。
+- 下载任务按下载、做种、暂停和错误状态显示双色胶囊进度条；批量选择操作改为底部
+  悬浮材质栏，保留全选、取消全选和完整批量管理能力。
+- TG 签到执行记录新增可持久化步骤时间轴，记录 Bot 定位、命令发送、回复、面板操作、
+  结果解析和企业微信转发；点击节点可查看对应原始返回，旧历史无需迁移即可兼容显示。
+- 将设计系统和 TG 时间轴拆为独立 Swift 文件并纳入 Xcode 工程，开始降低超大功能文件
+  的维护压力；继续使用 Swift Charts、原生 Sheet 和现有 Core Animation，不增加三方包。
+- 对照 Flutter `a5801bcb...b2e4c7f2` 完成增量审查：Flutter sheet 路由层重写、
+  站点筛选主题 token 接入和移动搜索工具条 SafeArea 修复均属于 Flutter 组件实现；
+  原生 SwiftUI 已使用系统 sheet、主题和导航安全区，无对应接口或功能代码需要复制。
+- App、收割机助手 Safari 扩展和 CookieCloud Safari 扩展的版本统一同步至
+  `2026.1021.01 (301)`。
 
 ### 2026.1013.02 (300) - 2026-10-13
 

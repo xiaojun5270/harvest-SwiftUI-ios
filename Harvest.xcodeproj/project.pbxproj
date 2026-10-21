@@ -20,6 +20,8 @@
 		10000000000000000000000B /* PerformanceMonitoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* PerformanceMonitoring.swift */; };
 		10000000000000000000000C /* SafariExtensionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000F /* SafariExtensionSupport.swift */; };
 		10000000000000000000000D /* TelegramCheckinFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* TelegramCheckinFeatures.swift */; };
+		10000000000000000000000F /* HarvestDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000011 /* HarvestDesignSystem.swift */; };
+		100000000000000000000010 /* TelegramTimelineViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* TelegramTimelineViews.swift */; };
 		10000000000000000000000E /* TDLibKit in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000002 /* TDLibKit */; };
 		B00000000000000000000001 /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* SafariWebExtensionHandler.swift */; };
 		B00000000000000000000002 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* manifest.json */; };
@@ -93,6 +95,8 @@
 		20000000000000000000000E /* PerformanceMonitoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceMonitoring.swift; sourceTree = "<group>"; };
 		20000000000000000000000F /* SafariExtensionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariExtensionSupport.swift; sourceTree = "<group>"; };
 		200000000000000000000010 /* TelegramCheckinFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramCheckinFeatures.swift; sourceTree = "<group>"; };
+		200000000000000000000011 /* HarvestDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarvestDesignSystem.swift; sourceTree = "<group>"; };
+		200000000000000000000012 /* TelegramTimelineViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramTimelineViews.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000002 /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = manifest.json; sourceTree = "<group>"; };
@@ -160,6 +164,7 @@
 			children = (
 				200000000000000000000001 /* HarvestApp.swift */,
 				200000000000000000000002 /* Core.swift */,
+				200000000000000000000011 /* HarvestDesignSystem.swift */,
 				20000000000000000000000E /* PerformanceMonitoring.swift */,
 				200000000000000000000003 /* SharedViews.swift */,
 				200000000000000000000004 /* PrimaryFeatures.swift */,
@@ -169,6 +174,7 @@
 				200000000000000000000006 /* ManagementFeatures.swift */,
 				20000000000000000000000F /* SafariExtensionSupport.swift */,
 				200000000000000000000010 /* TelegramCheckinFeatures.swift */,
+				200000000000000000000012 /* TelegramTimelineViews.swift */,
 				200000000000000000000007 /* Assets.xcassets */,
 				200000000000000000000008 /* Info.plist */,
 				20000000000000000000000D /* PrivacyInfo.xcprivacy */,
@@ -392,6 +398,7 @@
 			files = (
 				100000000000000000000001 /* HarvestApp.swift in Sources */,
 				100000000000000000000002 /* Core.swift in Sources */,
+				10000000000000000000000F /* HarvestDesignSystem.swift in Sources */,
 				10000000000000000000000B /* PerformanceMonitoring.swift in Sources */,
 				100000000000000000000003 /* SharedViews.swift in Sources */,
 				100000000000000000000004 /* PrimaryFeatures.swift in Sources */,
@@ -401,6 +408,7 @@
 				100000000000000000000006 /* ManagementFeatures.swift in Sources */,
 				10000000000000000000000C /* SafariExtensionSupport.swift in Sources */,
 				10000000000000000000000D /* TelegramCheckinFeatures.swift in Sources */,
+				100000000000000000000010 /* TelegramTimelineViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -491,7 +499,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -499,7 +507,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Harvest;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 2026.1013.02;
+				MARKETING_VERSION = 2026.1021.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ptools.harvest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -518,7 +526,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -526,7 +534,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Harvest;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 2026.1013.02;
+				MARKETING_VERSION = 2026.1021.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ptools.harvest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -544,13 +552,13 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = HarvestSafariExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../../Frameworks");
-				MARKETING_VERSION = 2026.1013.02;
+				MARKETING_VERSION = 2026.1021.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ptools.harvest.SafariExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -568,13 +576,13 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = HarvestSafariExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../../Frameworks");
-				MARKETING_VERSION = 2026.1013.02;
+				MARKETING_VERSION = 2026.1021.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ptools.harvest.SafariExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -592,13 +600,13 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CookieCloudSafariExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../../Frameworks");
-				MARKETING_VERSION = 2026.1013.02;
+				MARKETING_VERSION = 2026.1021.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ptools.harvest.CookieCloudSafariExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -616,13 +624,13 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CookieCloudSafariExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../../Frameworks");
-				MARKETING_VERSION = 2026.1013.02;
+				MARKETING_VERSION = 2026.1021.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ptools.harvest.CookieCloudSafariExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

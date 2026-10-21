@@ -3120,21 +3120,37 @@ struct TorrentListView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if selectionMode {
-                HStack(spacing: 12) {
-                    Text("已选 \(selectedTorrents.count) 项")
-                        .font(.subheadline.weight(.semibold))
+                HStack(spacing: HarvestDesignSystem.Spacing.sm) {
+                    Label("\(selectedTorrents.count)", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(HarvestTheme.green)
                     Spacer()
-                    Button(selectedIDs.count == model.filtered.count ? "取消全选" : "全选") {
+                    Button {
                         if selectedIDs.count == model.filtered.count { selectedIDs = [] }
                         else { selectAllVisible() }
+                    } label: {
+                        Label(
+                            selectedIDs.count == model.filtered.count ? "取消全选" : "全选",
+                            systemImage: selectedIDs.count == model.filtered.count ? "circle" : "checkmark.circle"
+                        )
                     }
-                    Button("批量操作") { presentAdvancedActions(selectedTorrents) }
+                    .buttonStyle(.bordered)
+                    Button { presentAdvancedActions(selectedTorrents) } label: {
+                        Label("批量操作", systemImage: "slider.horizontal.3")
+                    }
                         .buttonStyle(.borderedProminent)
                         .tint(HarvestTheme.green)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(.ultraThinMaterial)
+                .padding(.horizontal, HarvestDesignSystem.Spacing.md)
+                .padding(.vertical, HarvestDesignSystem.Spacing.sm)
+                .background(.regularMaterial, in: Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(Color.white.opacity(0.42), lineWidth: HarvestDesignSystem.Layout.hairline)
+                }
+                .shadow(color: Color.black.opacity(0.14), radius: 12, y: 5)
+                .padding(.horizontal, HarvestDesignSystem.Layout.pageInset)
+                .padding(.bottom, HarvestDesignSystem.Spacing.xs)
             }
         }
         .task {
@@ -3511,7 +3527,10 @@ struct TorrentRow: View {
                 } label: { Image(systemName: "ellipsis").frame(width: 30, height: 30) }
             }
             let safeProgress = normalizedProgress(item.progress)
-            ProgressView(value: safeProgress).tint(progressColor)
+            TorrentStateProgressBar(
+                progress: safeProgress,
+                colors: progressGradientColors
+            )
             HStack {
                 Text("\(clampedInt(safeProgress * 100))%").fontWeight(.semibold)
                 Text(formatBytes(item.size))
@@ -3545,6 +3564,13 @@ struct TorrentRow: View {
         item.hasError ? HarvestTheme.coral : item.progress >= 1 ? HarvestTheme.green : item.downloadSpeed > 0 ? HarvestTheme.blue : HarvestTheme.amber
     }
 
+    private var progressGradientColors: [Color] {
+        if item.hasError { return [Color(red: 1.0, green: 0.45, blue: 0.38), HarvestTheme.coral] }
+        if item.progress >= 1 || item.uploadSpeed > 0 { return [HarvestTheme.teal, HarvestTheme.green] }
+        if item.downloadSpeed > 0 { return [Color.cyan, HarvestTheme.blue] }
+        return [Color.secondary.opacity(0.45), Color.secondary.opacity(0.72)]
+    }
+
     private var statusIcon: String {
         if item.hasError { return "exclamationmark.triangle.fill" }
         if item.progress >= 1 { return "checkmark.circle.fill" }
@@ -3571,6 +3597,40 @@ struct TorrentRow: View {
             Label(title, systemImage: icon)
         }
         .disabled(value.isEmpty)
+    }
+}
+
+private struct TorrentStateProgressBar: View {
+    let progress: Double
+    let colors: [Color]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var fraction: Double { min(max(progress, 0), 1) }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: colors,
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: proxy.size.width * fraction)
+            }
+        }
+        .frame(height: 8)
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: HarvestDesignSystem.Motion.standard),
+            value: fraction
+        )
+        .accessibilityElement()
+        .accessibilityLabel("任务进度")
+        .accessibilityValue("\(Int((fraction * 100).rounded()))%")
     }
 }
 

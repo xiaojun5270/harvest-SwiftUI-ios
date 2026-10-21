@@ -5,18 +5,6 @@ import UIKit
 import UserNotifications
 import WebKit
 
-enum HarvestTheme {
-    static let green = Color(red: 0.18, green: 0.56, blue: 0.36)
-    static let coral = Color(red: 0.91, green: 0.36, blue: 0.46)
-    static let amber = Color(red: 0.94, green: 0.64, blue: 0.10)
-    static let blue = Color(red: 0.20, green: 0.52, blue: 0.87)
-    static let teal = Color(red: 0.10, green: 0.62, blue: 0.60)
-    static let purple = Color(red: 0.50, green: 0.38, blue: 0.82)
-    static let orange = Color(red: 0.95, green: 0.43, blue: 0.18)
-    static let indigo = Color(red: 0.31, green: 0.38, blue: 0.78)
-    static let cardCornerRadius: CGFloat = 24
-}
-
 enum AppAppearance: String, CaseIterable, Identifiable {
     case system = "跟随系统"
     case light = "浅色"
@@ -2224,6 +2212,7 @@ final class AppState: ObservableObject {
             removeManualTask(id)
             return
         }
+        HarvestHaptics.notify(phase)
         manualTaskFeedback = feedback
         let delay: Duration
         switch phase {

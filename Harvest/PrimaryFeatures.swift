@@ -1654,6 +1654,7 @@ struct DashboardView: View {
                     serverConnected: model.serverConnected,
                     serverError: model.serverError,
                     snapshot: model.snapshot,
+                    speedHistory: model.serverHistory,
                     privacy: appState.privacyMode
                 )
             }
@@ -1926,17 +1927,57 @@ private struct DashboardTrafficTrendView: View {
     let points: [TrendPoint]
     let days: Int
     let height: CGFloat
+    @State private var selectedDate: Date?
+
+    private var visiblePoints: [TrendPoint] {
+        Array(points.suffix(max(1, days)))
+    }
+
+    private var selectedPoint: TrendPoint? {
+        guard let selectedDate else { return nil }
+        return visiblePoints.min {
+            abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate))
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "流量趋势", subtitle: "最近同步周期")
-            Chart(Array(points.suffix(max(1, days)))) { point in
-                LineMark(x: .value("时间", point.date), y: .value("上传", point.upload))
-                    .foregroundStyle(HarvestTheme.green)
-                    .interpolationMethod(.catmullRom)
-                LineMark(x: .value("时间", point.date), y: .value("下载", point.download))
-                    .foregroundStyle(HarvestTheme.blue)
-                    .interpolationMethod(.catmullRom)
+            SectionHeader(
+                title: "流量趋势",
+                subtitle: selectedPoint.map { $0.date.formatted(date: .abbreviated, time: .omitted) } ?? "最近同步周期"
+            )
+            Chart {
+                ForEach(visiblePoints) { point in
+                    LineMark(x: .value("时间", point.date), y: .value("上传", point.upload))
+                        .foregroundStyle(HarvestTheme.green)
+                        .interpolationMethod(.catmullRom)
+                    LineMark(x: .value("时间", point.date), y: .value("下载", point.download))
+                        .foregroundStyle(HarvestTheme.blue)
+                        .interpolationMethod(.catmullRom)
+                }
+                if let selectedPoint {
+                    RuleMark(x: .value("选中日期", selectedPoint.date))
+                        .foregroundStyle(Color.secondary.opacity(0.45))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .annotation(position: .top, spacing: 6) {
+                            HStack(spacing: HarvestDesignSystem.Spacing.xs) {
+                                Label(
+                                    dashboardCompactBytes(selectedPoint.upload),
+                                    systemImage: "arrow.up"
+                                )
+                                .foregroundStyle(HarvestTheme.green)
+                                Label(
+                                    dashboardCompactBytes(selectedPoint.download),
+                                    systemImage: "arrow.down"
+                                )
+                                .foregroundStyle(HarvestTheme.blue)
+                            }
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .padding(.horizontal, HarvestDesignSystem.Spacing.xs)
+                            .padding(.vertical, HarvestDesignSystem.Spacing.xxs)
+                            .background(.regularMaterial, in: Capsule())
+                        }
+                }
             }
             .chartYAxis {
                 AxisMarks(position: .leading) { value in
@@ -1948,7 +1989,9 @@ private struct DashboardTrafficTrendView: View {
                     }
                 }
             }
+            .chartXSelection(value: $selectedDate)
             .frame(height: height)
+            .accessibilityLabel("最近 \(days) 天上传下载趋势，可拖动查看每日数据")
         }
         .cardSurface()
     }
@@ -2152,6 +2195,7 @@ private struct DashboardHeroView: View {
     let serverConnected: Bool
     let serverError: String?
     let snapshot: DashboardSnapshot
+    let speedHistory: [DashboardServerPoint]
     let privacy: Bool
 
     private var statusLabel: String {
@@ -2165,7 +2209,7 @@ private struct DashboardHeroView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: HarvestDesignSystem.Spacing.md) {
             HStack(alignment: .top, spacing: 12) {
                 FlowingSymbolBadge(icon: "chart.xyaxis.line", color: statusColor, size: 44)
                 VStack(alignment: .leading, spacing: 4) {
@@ -2183,26 +2227,29 @@ private struct DashboardHeroView: View {
 
             HStack(alignment: .top, spacing: 0) {
                 heroMetric(
-                    label: "站点",
-                    value: "\(snapshot.siteCount)",
-                    detail: snapshot.unread > 0 ? "\(snapshot.unread) 条未读" : nil,
-                    color: HarvestTheme.coral
-                )
-                Divider().frame(height: 46)
-                heroMetric(
-                    label: "下载速度",
-                    value: formatSpeed(snapshot.downloadSpeed),
-                    detail: "实时",
-                    color: HarvestTheme.blue
-                )
-                Divider().frame(height: 46)
-                heroMetric(
-                    label: "上传速度",
-                    value: formatSpeed(snapshot.uploadSpeed),
-                    detail: "实时",
+                    label: "今日上传",
+                    value: dashboardCompactBytes(snapshot.todayUploaded),
+                    detail: nil,
                     color: HarvestTheme.green
                 )
+                Divider().frame(height: 46)
+                heroMetric(
+                    label: "今日下载",
+                    value: dashboardCompactBytes(snapshot.todayDownloaded),
+                    detail: nil,
+                    color: HarvestTheme.blue
+                )
             }
+
+            Divider()
+
+            HStack(spacing: 0) {
+                compactStatus(label: "站点", value: "\(snapshot.siteCount)", color: HarvestTheme.coral)
+                compactStatus(label: "下载中", value: "\(snapshot.leeching)", color: HarvestTheme.blue)
+                compactStatus(label: "未读", value: "\(snapshot.unread)", color: HarvestTheme.amber)
+            }
+
+            liveSpeedSection
         }
         .padding(18)
         .background(
@@ -2213,6 +2260,78 @@ private struct DashboardHeroView: View {
             RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
                 .stroke(statusColor.opacity(0.18), lineWidth: 1)
         }
+    }
+
+    @ViewBuilder private var liveSpeedSection: some View {
+        VStack(alignment: .leading, spacing: HarvestDesignSystem.Spacing.xs) {
+            HStack {
+                Label(formatSpeed(snapshot.downloadSpeed), systemImage: "arrow.down")
+                    .foregroundStyle(HarvestTheme.blue)
+                Spacer(minLength: 8)
+                Label(formatSpeed(snapshot.uploadSpeed), systemImage: "arrow.up")
+                    .foregroundStyle(HarvestTheme.green)
+            }
+            .font(.caption.weight(.semibold).monospacedDigit())
+
+            if speedHistory.count > 1 {
+                Chart(Array(speedHistory.suffix(30))) { point in
+                    AreaMark(
+                        x: .value("时间", point.date),
+                        y: .value("下载", point.downloadSpeed)
+                    )
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [HarvestTheme.blue.opacity(0.34), HarvestTheme.blue.opacity(0.02)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .interpolationMethod(.catmullRom)
+                    LineMark(
+                        x: .value("时间", point.date),
+                        y: .value("下载", point.downloadSpeed)
+                    )
+                    .foregroundStyle(HarvestTheme.blue)
+                    .interpolationMethod(.catmullRom)
+                    LineMark(
+                        x: .value("时间", point.date),
+                        y: .value("上传", point.uploadSpeed)
+                    )
+                    .foregroundStyle(HarvestTheme.green)
+                    .interpolationMethod(.catmullRom)
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .chartLegend(.hidden)
+                .frame(height: 58)
+                .accessibilityLabel("实时上传下载速率趋势")
+            } else {
+                HStack(spacing: HarvestDesignSystem.Spacing.xs) {
+                    Capsule().fill(HarvestTheme.blue.opacity(0.32))
+                    Capsule().fill(HarvestTheme.green.opacity(0.32))
+                }
+                .frame(height: 7)
+                .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, HarvestDesignSystem.Spacing.sm)
+        .padding(.vertical, HarvestDesignSystem.Spacing.xs)
+        .background(
+            statusColor.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+        )
+    }
+
+    private func compactStatus(label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.headline.weight(.bold).monospacedDigit())
+                .foregroundStyle(color)
+            Text(label)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func heroMetric(label: String, value: String, detail: String?, color: Color) -> some View {

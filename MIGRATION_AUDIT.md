@@ -1,6 +1,6 @@
 # iOS Native Migration Audit
 
-Audit date: 2026-10-13
+Audit date: 2026-10-21
 
 Reference: the Flutter implementation in the parent repository and its active
 UI/service call sites.
@@ -20,6 +20,14 @@ An authoritative 1:1 result still requires an Xcode 26 build, API integration
 pass, and device testing against a reachable Harvest server.
 
 ## Latest Corrections
+
+- The Flutter delta from `a5801bcb` through release `b2e4c7f2` was reviewed.
+  It rewrites Flutter's custom sheet route to remove layered overlays, applies
+  Flutter theme tokens to the site-filter panel, and adds a SafeArea around the
+  mobile Flutter search toolbar. Native iOS already uses system SwiftUI sheets,
+  native theme controls, and navigation-managed safe areas, so no product or API
+  code applies. App and both Safari extension targets are synchronized to
+  `2026.1021.01+301`.
 
 - The Flutter delta from `3559697e` through release `a5801bcb` was reviewed.
   It hardens an Android-only `flutter_inappwebview_android` ProGuard patch, fixes

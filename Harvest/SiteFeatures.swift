@@ -1776,7 +1776,11 @@ struct SitesView: View {
                                     onOpenBrowser: { openBrowser(for: site) },
                                     onOpenExternalBrowser: { openExternalBrowser(for: site) },
                                     onOpenLevel: { levelSite = site },
-                                    onOpenSignIn: { signInSite = site }
+                                    onOpenSignIn: { signInSite = site },
+                                    onEditCredentials: { editingSite = site },
+                                    onRetry: {
+                                        Task { await model.operate(appState, site: site, path: APIPath.siteStatus) }
+                                    }
                                 )
                                 .contextMenu { SiteActions(site: site, model: model) }
                                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
@@ -2646,8 +2650,20 @@ struct SiteFilterSheet: View {
                 }
                 if !model.availableTags.isEmpty {
                     Section {
-                        ForEach(model.availableTags, id: \.self) { tag in
-                            Toggle(tag, isOn: tagBinding(tag))
+                        LazyVGrid(
+                            columns: [GridItem(.flexible()), GridItem(.flexible())],
+                            spacing: HarvestDesignSystem.Spacing.xs
+                        ) {
+                            ForEach(model.availableTags, id: \.self) { tag in
+                                HarvestSelectionChip(
+                                    title: tag,
+                                    isSelected: model.selectedTags.contains(tag),
+                                    color: HarvestTheme.blue
+                                ) {
+                                    let binding = tagBinding(tag)
+                                    binding.wrappedValue = !binding.wrappedValue
+                                }
+                            }
                         }
                     } header: {
                         filterSectionHeader("快捷标签", selectedCount: model.selectedTags.count) {
@@ -2657,8 +2673,20 @@ struct SiteFilterSheet: View {
                 }
                 if !model.availableTypes.isEmpty {
                     Section {
-                        ForEach(model.availableTypes, id: \.self) { type in
-                            Toggle(type, isOn: typeBinding(type))
+                        LazyVGrid(
+                            columns: [GridItem(.flexible()), GridItem(.flexible())],
+                            spacing: HarvestDesignSystem.Spacing.xs
+                        ) {
+                            ForEach(model.availableTypes, id: \.self) { type in
+                                HarvestSelectionChip(
+                                    title: type,
+                                    isSelected: model.selectedTypes.contains(type),
+                                    color: HarvestTheme.teal
+                                ) {
+                                    let binding = typeBinding(type)
+                                    binding.wrappedValue = !binding.wrappedValue
+                                }
+                            }
                         }
                     } header: {
                         filterSectionHeader("类型", selectedCount: model.selectedTypes.count) {
@@ -3635,6 +3663,8 @@ struct SiteRow: View {
     let onOpenExternalBrowser: () -> Void
     let onOpenLevel: () -> Void
     let onOpenSignIn: () -> Void
+    let onEditCredentials: () -> Void
+    let onRetry: () -> Void
 
     init(
         site: SiteItem,
@@ -3647,7 +3677,9 @@ struct SiteRow: View {
         onOpenBrowser: @escaping () -> Void = {},
         onOpenExternalBrowser: @escaping () -> Void = {},
         onOpenLevel: @escaping () -> Void = {},
-        onOpenSignIn: @escaping () -> Void = {}
+        onOpenSignIn: @escaping () -> Void = {},
+        onEditCredentials: @escaping () -> Void = {},
+        onRetry: @escaping () -> Void = {}
     ) {
         self.site = site
         self.privacy = privacy
@@ -3660,11 +3692,16 @@ struct SiteRow: View {
         self.onOpenExternalBrowser = onOpenExternalBrowser
         self.onOpenLevel = onOpenLevel
         self.onOpenSignIn = onOpenSignIn
+        self.onEditCredentials = onEditCredentials
+        self.onRetry = onRetry
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            if !site.enabled {
+                warningStrip
+            }
             Button(action: onOpenDetails) {
                 VStack(alignment: .leading, spacing: 8) {
                     trafficSection
@@ -3699,6 +3736,44 @@ struct SiteRow: View {
         .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
         .allowsHitTesting(!isRefreshing)
         .accessibilityElement(children: .contain)
+    }
+
+    private var warningStrip: some View {
+        HStack(spacing: HarvestDesignSystem.Spacing.xs) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(HarvestTheme.coral)
+            Text("连接异常，请检查站点凭证")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            Button(action: onEditCredentials) {
+                Image(systemName: "key.horizontal.fill")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(HarvestTheme.amber)
+            .accessibilityLabel("更新站点凭证")
+            .help("更新凭证")
+            Button(action: onRetry) {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(HarvestTheme.blue)
+            .accessibilityLabel("重试连接")
+            .help("重试连接")
+        }
+        .padding(.horizontal, HarvestDesignSystem.Spacing.sm)
+        .padding(.vertical, HarvestDesignSystem.Spacing.xs)
+        .background(
+            HarvestTheme.coral.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
+                .stroke(HarvestTheme.coral.opacity(0.22), lineWidth: HarvestDesignSystem.Layout.hairline)
+        }
     }
 
     private var metricColumns: [GridItem] {
