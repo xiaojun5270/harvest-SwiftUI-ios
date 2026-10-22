@@ -438,7 +438,6 @@ final class SitesViewModel: ObservableObject {
     @Published var isLoading = true
     @Published private(set) var usingCachedData = false
     @Published private(set) var cachedAt: Date?
-    @Published private(set) var summaryFilterActive = false
     @Published var query = "" {
         didSet {
             UserDefaults.standard.set(query, forKey: SiteFilterStorageKey.query)
@@ -735,7 +734,6 @@ final class SitesViewModel: ObservableObject {
     }
 
     func clearFilters() {
-        summaryFilterActive = false
         availability = .alive
         condition = .all
         activeTags = []
@@ -765,7 +763,7 @@ final class SitesViewModel: ObservableObject {
     }
 
     func useManualFilters() {
-        summaryFilterActive = false
+        activeTags = selectedTags
     }
 
     func setSortField(_ field: SiteSortField) {
@@ -773,38 +771,25 @@ final class SitesViewModel: ObservableObject {
         ascending = field.defaultAscending
     }
 
-    func selectTag(_ tag: String) {
-        guard selectedTags.contains(tag) else { return }
-        if activeTags.contains(tag) {
-            activeTags.remove(tag)
-        } else {
-            activeTags.insert(tag)
-        }
-    }
-
     func showActiveSites() {
         clearSummaryConflictingFilters()
         availability = .alive
         condition = .all
-        summaryFilterActive = true
     }
 
     func showPendingSignInSites() {
         clearSummaryConflictingFilters()
         availability = .alive
         condition = .unsigned
-        summaryFilterActive = true
     }
 
     func showUnreadSites() {
         clearSummaryConflictingFilters()
         availability = .all
         condition = .hasNewNotification
-        summaryFilterActive = true
     }
 
     private func clearSummaryConflictingFilters() {
-        summaryFilterActive = false
         query = ""
         activeTags = []
         selectedTags = []
@@ -2021,7 +2006,6 @@ struct SitesView: View {
 }
 
 private struct SiteSearchFilterBar: View {
-    @EnvironmentObject private var appState: AppState
     @ObservedObject var model: SitesViewModel
     let openFilters: () -> Void
     let openAdd: () -> Void
@@ -2063,41 +2047,7 @@ private struct SiteSearchFilterBar: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 4)
-            .padding(.bottom, showsFilterTokens ? 3 : 5)
-
-            if showsFilterTokens {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        if model.availability != .alive {
-                            filterToken(model.availability.rawValue)
-                        }
-                        if model.condition != .all {
-                            filterToken(model.condition.rawValue)
-                        }
-                        ForEach(model.selectedTypes.sorted(), id: \.self) { type in
-                            filterToken(type)
-                        }
-                        if !model.selectedTags.isEmpty {
-                            selectableTagToken("全部", isSelected: model.activeTags.isEmpty) {
-                                model.activeTags = []
-                            }
-                        }
-                        ForEach(model.selectedTags.sorted(), id: \.self) { tag in
-                            selectableTagToken(tag, isSelected: model.activeTags.contains(tag)) {
-                                model.selectTag(tag)
-                            }
-                        }
-                        if !model.selectedUsername.isEmpty {
-                            filterToken(privacyMaskedText(model.selectedUsername, enabled: appState.privacyMode))
-                        }
-                        if !model.selectedEmail.isEmpty {
-                            filterToken(privacyMaskedText(model.selectedEmail, enabled: appState.privacyMode))
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 5)
-                }
-            }
+            .padding(.bottom, 5)
         }
         .background(Color(uiColor: .secondarySystemBackground))
         .overlay(alignment: .bottom) { Divider() }
@@ -2232,57 +2182,6 @@ private struct SiteSearchFilterBar: View {
             .accessibilityHidden(true)
     }
 
-    private var showsFilterTokens: Bool {
-        !model.summaryFilterActive && (
-            model.availability != .alive
-            || model.condition != .all
-            || !model.selectedTypes.isEmpty
-            || !model.selectedTags.isEmpty
-            || !model.selectedUsername.isEmpty
-            || !model.selectedEmail.isEmpty
-        )
-    }
-
-    private func filterToken(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.medium))
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .frame(minHeight: 24)
-            .foregroundStyle(HarvestTheme.blue)
-            .background(HarvestTheme.blue.opacity(0.11), in: Capsule())
-            .overlay { Capsule().stroke(HarvestTheme.blue.opacity(0.18), lineWidth: 0.75) }
-            .accessibilityLabel("当前筛选：\(title)")
-    }
-
-    private func selectableTagToken(
-        _ title: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 9, weight: .bold))
-                }
-                Text(title).lineLimit(1)
-            }
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 8)
-            .frame(minHeight: 24)
-            .foregroundStyle(isSelected ? Color.white : HarvestTheme.blue)
-            .background(
-                isSelected ? HarvestTheme.blue : HarvestTheme.blue.opacity(0.08),
-                in: Capsule()
-            )
-            .overlay {
-                Capsule().stroke(HarvestTheme.blue.opacity(isSelected ? 0 : 0.22), lineWidth: 0.75)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("标签筛选：\(title)，\(isSelected ? "已选择" : "未选择")")
-    }
 }
 
 private struct SiteSearchTextField: UIViewRepresentable {

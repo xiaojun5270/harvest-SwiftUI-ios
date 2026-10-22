@@ -941,13 +941,14 @@ struct SettingsView: View {
     @State private var showingInvite = false
     @State private var selectedBrandMarkItem: PhotosPickerItem?
     @State private var brandMarkStatus = ""
+    @State private var navigationPath = NavigationPath()
     private let compactColumns = [
         GridItem(.flexible(), spacing: 8),
         GridItem(.flexible(), spacing: 8)
     ]
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             List {
                 Section {
                     profileAndBrandRow
@@ -1007,6 +1008,9 @@ struct SettingsView: View {
             .listSectionSpacing(8)
             .environment(\.defaultMinListRowHeight, 38)
             .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: SettingsRoute.self) { route in
+                settingsDestination(route)
+            }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(isPresented: $showingInvite) {
                 InviteSheet(notify: true) { }
@@ -1212,35 +1216,31 @@ struct SettingsView: View {
     private var managementGrid: some View {
         LazyVGrid(columns: compactColumns, spacing: 8) {
             if appState.profile?.isSuperuser == true {
-                NavigationLink { TasksView().environmentObject(appState) } label: {
+                Button { navigationPath.append(SettingsRoute.tasks) } label: {
                     SettingsCompactDestinationLabel(title: "任务中心", icon: "checklist", color: HarvestTheme.blue)
                 }
             }
-            NavigationLink { BackendOptionsView().environmentObject(appState) } label: {
+            Button { navigationPath.append(SettingsRoute.backend) } label: {
                 SettingsCompactDestinationLabel(title: "后端配置", icon: "slider.horizontal.3", color: HarvestTheme.green)
             }
-            NavigationLink { NotificationToolsView().environmentObject(appState) } label: {
+            Button { navigationPath.append(SettingsRoute.notifications) } label: {
                 SettingsCompactDestinationLabel(title: "通知与机器人", icon: "bell.and.waves.left.and.right", color: HarvestTheme.coral)
             }
-            NavigationLink { UserManagementView().environmentObject(appState) } label: {
+            Button { navigationPath.append(SettingsRoute.users) } label: {
                 SettingsCompactDestinationLabel(title: "用户中心", icon: "person.2", color: HarvestTheme.purple)
             }
             if appState.profile?.isSuperuser == true && appState.canOpenAdminUsers {
-                NavigationLink { AdminView().environmentObject(appState) } label: {
+                Button { navigationPath.append(SettingsRoute.admin) } label: {
                     SettingsCompactDestinationLabel(title: "授权管理", icon: "person.badge.key", color: HarvestTheme.amber)
                 }
             }
-            NavigationLink { LogView().environmentObject(appState) } label: {
+            Button { navigationPath.append(SettingsRoute.logs) } label: {
                 SettingsCompactDestinationLabel(title: "日志中心", icon: "doc.text.magnifyingglass", color: HarvestTheme.blue)
             }
-            NavigationLink { SafariExtensionSettingsView() } label: {
+            Button { navigationPath.append(SettingsRoute.safariExtension) } label: {
                 SettingsCompactDestinationLabel(title: "Safari 扩展", icon: "safari.fill", color: HarvestTheme.blue)
             }
-            NavigationLink {
-                NativeBrowserView(urlString: appState.baseURL, title: "服务页面")
-                    .navigationTitle("服务页面")
-                    .navigationBarTitleDisplayMode(.inline)
-            } label: {
+            Button { navigationPath.append(SettingsRoute.service) } label: {
                 SettingsCompactDestinationLabel(title: "服务页面", icon: "network", color: HarvestTheme.green)
             }
         }
@@ -1250,10 +1250,10 @@ struct SettingsView: View {
 
     private var maintenanceGrid: some View {
         LazyVGrid(columns: compactColumns, spacing: 8) {
-            NavigationLink { DataMaintenanceView().environmentObject(appState) } label: {
+            Button { navigationPath.append(SettingsRoute.dataMaintenance) } label: {
                 SettingsCompactDestinationLabel(title: "备份与迁移", icon: "externaldrive.badge.timemachine", color: HarvestTheme.blue)
             }
-            NavigationLink { UpdateMaintenanceView().environmentObject(appState) } label: {
+            Button { navigationPath.append(SettingsRoute.updateMaintenance) } label: {
                 SettingsCompactDestinationLabel(title: "更新与网络", icon: "arrow.triangle.2.circlepath", color: HarvestTheme.green)
             }
             Button {
@@ -1288,6 +1288,34 @@ struct SettingsView: View {
         .padding(.vertical, 2)
     }
 
+    @ViewBuilder
+    private func settingsDestination(_ route: SettingsRoute) -> some View {
+        switch route {
+        case .tasks:
+            TasksView().environmentObject(appState)
+        case .backend:
+            BackendOptionsView().environmentObject(appState)
+        case .notifications:
+            NotificationToolsView().environmentObject(appState)
+        case .users:
+            UserManagementView().environmentObject(appState)
+        case .admin:
+            AdminView().environmentObject(appState)
+        case .logs:
+            LogView().environmentObject(appState)
+        case .safariExtension:
+            SafariExtensionSettingsView()
+        case .service:
+            NativeBrowserView(urlString: appState.baseURL, title: "服务页面")
+                .navigationTitle("服务页面")
+                .navigationBarTitleDisplayMode(.inline)
+        case .dataMaintenance:
+            DataMaintenanceView().environmentObject(appState)
+        case .updateMaintenance:
+            UpdateMaintenanceView().environmentObject(appState)
+        }
+    }
+
     private func settingsIconButton(_ icon: String, color: Color) -> some View {
         Image(systemName: icon)
             .font(.subheadline.weight(.semibold))
@@ -1316,6 +1344,19 @@ struct SettingsView: View {
         let build = (info["CFBundleVersion"] as? String) ?? "--"
         return "\(version) (\(build))"
     }
+}
+
+private enum SettingsRoute: Hashable {
+    case tasks
+    case backend
+    case notifications
+    case users
+    case admin
+    case logs
+    case safariExtension
+    case service
+    case dataMaintenance
+    case updateMaintenance
 }
 
 private struct SettingsCompactChoiceLabel: View {

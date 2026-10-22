@@ -1697,22 +1697,31 @@ final class DownloadsViewModel: ObservableObject {
                 return
             }
             model.resolvingCountIDs = Set(candidates.map(\.id))
-            do {
-                let raw = try await appState.api(
-                    APIPath.downloaders,
-                    query: ["with_status": true],
-                    timeoutInterval: 15
-                )
-                guard !Task.isCancelled else { return }
-                model.applyReportedDownloaderCounts(
-                    jsonRows(raw),
-                    downloaderIDs: Set(candidates.map(\.id)),
-                    appState: appState
-                )
-            } catch {
-                if !isRequestCancellation(error) {
-                    recordAppLog(.warning, "下载器实时计数同步失败：\(error.localizedDescription)")
+            for candidate in candidates {
+                guard !Task.isCancelled else { break }
+                do {
+                    let raw = try await appState.api(
+                        "\(APIPath.downloaderMain)\(candidate.id)",
+                        timeoutInterval: downloaderIsTransmission(candidate.category) ? 15 : 12
+                    )
+                    guard !Task.isCancelled else { break }
+                    let receivedCounts = model.applyReportedDownloaderStatus(
+                        raw,
+                        downloaderID: candidate.id,
+                        appState: appState
+                    )
+                    if force, !receivedCounts {
+                        recordAppLog(
+                            .warning,
+                            "下载器 \(candidate.id) 状态响应未返回 activeTorrentCount/torrentCount"
+                        )
+                    }
+                } catch {
+                    if !isRequestCancellation(error) {
+                        recordAppLog(.warning, "下载器 \(candidate.id) 实时计数同步失败：\(error.localizedDescription)")
+                    }
                 }
+                model.resolvingCountIDs.remove(candidate.id)
             }
             model.resolvingCountIDs = []
             model.lastCountRefreshAt = Date()
@@ -1720,43 +1729,49 @@ final class DownloadsViewModel: ObservableObject {
         }
     }
 
-    private func applyReportedDownloaderCounts(
-        _ rows: [[String: Any]],
-        downloaderIDs: Set<Int>,
+    private func applyReportedDownloaderStatus(
+        _ raw: Any,
+        downloaderID: Int,
         appState: AppState
-    ) {
-        let reportedByID = Dictionary(
-            rows.compactMap { row -> (Int, [String: Any])? in
-                guard let id = row.int("id"), downloaderIDs.contains(id) else { return nil }
-                return (id, row)
-            },
-            uniquingKeysWith: { _, latest in latest }
-        )
-        var updated = downloaders
-        var changed = false
-        for index in updated.indices {
-            let current = updated[index]
-            guard let reported = reportedByID[current.id] else { continue }
-            let active = downloaderMetricInt(reported, keys: downloaderActiveCountKeys)
-            let paused = downloaderMetricInt(reported, keys: downloaderPausedCountKeys)
-            let total = downloaderMetricInt(reported, keys: downloaderTotalCountKeys)
-            guard active != nil || paused != nil || total != nil else { continue }
-            var values: [String: Any] = [:]
-            if let active { values["activeTorrentCount"] = max(0, active) }
-            if let paused { values["pausedTorrentCount"] = max(0, paused) }
-            if let total { values["torrentCount"] = max(0, total) }
-            let next = DownloaderItem(mergingDownloaderStatus(values, into: current.raw))
-            guard next.activeTorrentCount != current.activeTorrentCount
-                    || next.pausedTorrentCount != current.pausedTorrentCount
-                    || next.totalTorrentCount != current.totalTorrentCount else { continue }
-            updated[index] = next
-            changed = true
-        }
-        guard changed else { return }
-        downloaders = updated
+    ) -> Bool {
+        guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }),
+              let status = reportedDownloaderStatus(raw) else { return false }
+        let active = downloaderMetricInt(status, keys: downloaderActiveCountKeys)
+        let paused = downloaderMetricInt(status, keys: downloaderPausedCountKeys)
+        let total = downloaderMetricInt(status, keys: downloaderTotalCountKeys)
+        guard active != nil || paused != nil || total != nil else { return false }
+        let current = downloaders[index]
+        var values: [String: Any] = [:]
+        if let active { values["activeTorrentCount"] = max(0, active) }
+        if let paused { values["pausedTorrentCount"] = max(0, paused) }
+        if let total { values["torrentCount"] = max(0, total) }
+        let next = DownloaderItem(mergingDownloaderStatus(values, into: current.raw))
+        guard next.activeTorrentCount != current.activeTorrentCount
+                || next.pausedTorrentCount != current.pausedTorrentCount
+                || next.totalTorrentCount != current.totalTorrentCount else { return true }
+        downloaders[index] = next
         usingCachedData = false
         cachedAt = nil
         scheduleCachePersistence(appState)
+        return true
+    }
+
+    private func reportedDownloaderStatus(_ raw: Any) -> [String: Any]? {
+        guard let root = jsonPayloadDictionary(raw) ?? jsonDictionary(raw) else { return nil }
+        if let status = root.dict("status", "server_state", "serverState") { return status }
+        if downloaderMetricInt(root, keys: downloaderTotalCountKeys) != nil
+            || downloaderMetricInt(root, keys: downloaderActiveCountKeys) != nil {
+            return root
+        }
+        for key in ["data", "result", "info"] {
+            guard let nested = root.dict(key) else { continue }
+            if let status = nested.dict("status", "server_state", "serverState") { return status }
+            if downloaderMetricInt(nested, keys: downloaderTotalCountKeys) != nil
+                || downloaderMetricInt(nested, keys: downloaderActiveCountKeys) != nil {
+                return nested
+            }
+        }
+        return nil
     }
 
     func isResolvingCounts(_ downloader: DownloaderItem) -> Bool {
