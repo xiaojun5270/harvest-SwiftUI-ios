@@ -1188,7 +1188,7 @@ struct RemoteImageCandidate: Identifiable {
         if let persistentCacheID, persistentCacheID.hasPrefix("site-icon|") {
             return persistentCacheID
         }
-        remoteImageCacheKey(
+        return remoteImageCacheKey(
             url: url,
             headers: remoteImageHeaders(for: url, additional: headers),
             variant: prefersLinkedMediaPoster ? "linked-media-poster" : ""
