@@ -438,6 +438,7 @@ final class SitesViewModel: ObservableObject {
     @Published var isLoading = true
     @Published private(set) var usingCachedData = false
     @Published private(set) var cachedAt: Date?
+    @Published private(set) var summaryFilterActive = false
     @Published var query = "" {
         didSet {
             UserDefaults.standard.set(query, forKey: SiteFilterStorageKey.query)
@@ -723,15 +724,18 @@ final class SitesViewModel: ObservableObject {
     }
 
     func loadOnAppear(_ appState: AppState) async {
-        guard !didLoadOnAppear else { return }
+        guard !didLoadOnAppear, appState.beginInitialPageLoad("sites") else { return }
         didLoadOnAppear = true
         defer {
-            if Task.isCancelled { didLoadOnAppear = false }
+            let success = !Task.isCancelled
+            if !success { didLoadOnAppear = false }
+            appState.finishInitialPageLoad("sites", success: success)
         }
         await load(appState, background: true)
     }
 
     func clearFilters() {
+        summaryFilterActive = false
         availability = .alive
         condition = .all
         activeTags = []
@@ -760,6 +764,10 @@ final class SitesViewModel: ObservableObject {
         defaults.removeObject(forKey: SiteFilterStorageKey.ascending)
     }
 
+    func useManualFilters() {
+        summaryFilterActive = false
+    }
+
     func setSortField(_ field: SiteSortField) {
         sortField = field
         ascending = field.defaultAscending
@@ -778,21 +786,25 @@ final class SitesViewModel: ObservableObject {
         clearSummaryConflictingFilters()
         availability = .alive
         condition = .all
+        summaryFilterActive = true
     }
 
     func showPendingSignInSites() {
         clearSummaryConflictingFilters()
         availability = .alive
         condition = .unsigned
+        summaryFilterActive = true
     }
 
     func showUnreadSites() {
         clearSummaryConflictingFilters()
         availability = .all
         condition = .hasNewNotification
+        summaryFilterActive = true
     }
 
     private func clearSummaryConflictingFilters() {
+        summaryFilterActive = false
         query = ""
         activeTags = []
         selectedTags = []
@@ -1736,12 +1748,6 @@ struct SitesView: View {
             .padding(.bottom, 3)
 
             if selectedSection == .sites {
-                if model.usingCachedData {
-                    SessionCacheBanner(cachedAt: model.cachedAt)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
-                }
                 SiteSearchFilterBar(
                     model: model,
                     openFilters: { showFilters = true },
@@ -2227,12 +2233,14 @@ private struct SiteSearchFilterBar: View {
     }
 
     private var showsFilterTokens: Bool {
-        model.availability != .alive
+        !model.summaryFilterActive && (
+            model.availability != .alive
             || model.condition != .all
             || !model.selectedTypes.isEmpty
             || !model.selectedTags.isEmpty
             || !model.selectedUsername.isEmpty
             || !model.selectedEmail.isEmpty
+        )
     }
 
     private func filterToken(_ title: String) -> some View {
@@ -2766,7 +2774,10 @@ struct SiteFilterSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("应用筛选") { dismiss() }
+                    Button("应用筛选") {
+                        model.useManualFilters()
+                        dismiss()
+                    }
                         .fontWeight(.semibold)
                 }
             }
@@ -3778,15 +3789,6 @@ struct SiteRow: View {
         }
         .padding(11)
         .harvestGlassSurface(cornerRadius: HarvestTheme.cardCornerRadius)
-        .overlay {
-            if isRefreshing {
-                RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(HarvestTheme.blue)
-            }
-        }
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
         .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
@@ -4250,7 +4252,7 @@ private struct SiteMetricIcon: View {
             color: color,
             size: size,
             usesSolidFill: prominent,
-            showsFlowEffect: prominent
+            showsFlowEffect: false
         )
     }
 }

@@ -762,10 +762,12 @@ final class DashboardViewModel: ObservableObject {
     var hasDisplayableData: Bool { snapshot.hasDisplayableData }
 
     func loadOnAppear(_ appState: AppState, days: Int) async {
-        guard !didLoadOnAppear else { return }
+        guard !didLoadOnAppear, appState.beginInitialPageLoad("dashboard") else { return }
         didLoadOnAppear = true
         defer {
-            if Task.isCancelled { didLoadOnAppear = false }
+            let success = !Task.isCancelled
+            if !success { didLoadOnAppear = false }
+            appState.finishInitialPageLoad("dashboard", success: success)
         }
         await load(appState, days: days)
     }
@@ -1512,9 +1514,6 @@ struct DashboardView: View {
                 if model.isLoading && !model.usingCachedData && !model.hasDisplayableData {
                     LoadingState()
                 } else {
-                    if model.usingCachedData {
-                        SessionCacheBanner(cachedAt: model.cachedAt)
-                    }
                     ForEach(moduleOrder) { module in
                         dashboardModule(module)
                     }
@@ -3328,7 +3327,7 @@ private struct DashboardScrollableModule<Content: View>: View {
         itemCount: Int,
         rowHeight: CGFloat,
         contentHeightAdjustment: CGFloat = 0,
-        showsFlowEffect: Bool = true,
+        showsFlowEffect: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title

@@ -2205,10 +2205,6 @@ struct DownloadsView: View {
             if model.isLoading { LoadingState() }
             else {
                 LazyVStack(spacing: 16) {
-                    if model.usingCachedData {
-                        SessionCacheBanner(cachedAt: model.cachedAt)
-                            .padding(.horizontal, 16)
-                    }
                     downloaderListHeader
                     if model.downloaders.isEmpty {
                         EmptyState(
@@ -2283,7 +2279,10 @@ struct DownloadsView: View {
             }
         }
         .task {
-            if model.isLoading { await model.load(appState) }
+            if model.isLoading, appState.beginInitialPageLoad("downloads") {
+                await model.load(appState)
+                appState.finishInitialPageLoad("downloads", success: !Task.isCancelled)
+            }
             guard !Task.isCancelled else { return }
             do { try await Task.sleep(for: .milliseconds(180)) }
             catch { return }
@@ -3128,9 +3127,6 @@ struct TorrentListView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                if model.usingCachedData {
-                    SessionCacheBanner(cachedAt: model.cachedAt)
-                }
                 torrentSummary
                 if model.isLoading && model.filtered.isEmpty {
                     LoadingState()

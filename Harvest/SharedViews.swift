@@ -1185,12 +1185,34 @@ struct RemoteImageCandidate: Identifiable {
     }
 
     var id: String {
+        if let persistentCacheID, persistentCacheID.hasPrefix("site-icon|") {
+            return persistentCacheID
+        }
         remoteImageCacheKey(
             url: url,
             headers: remoteImageHeaders(for: url, additional: headers),
             variant: prefersLinkedMediaPoster ? "linked-media-poster" : ""
         )
     }
+}
+
+private func animatedRemoteImageCacheKey(
+    for candidate: RemoteImageCandidate,
+    maximumPixelSize: CGFloat
+) -> String? {
+    guard let normalizedURL = URL(string: normalizedRemoteImageURL(candidate.url.absoluteString)) else {
+        return nil
+    }
+    let baseKey: String
+    if let persistentCacheID = candidate.persistentCacheID,
+       persistentCacheID.hasPrefix("site-icon|") {
+        baseKey = persistentCacheID
+    } else {
+        let effectiveHeaders = remoteImageHeaders(for: normalizedURL, additional: candidate.headers)
+        let variant = candidate.prefersLinkedMediaPoster ? "linked-media-poster" : ""
+        baseKey = remoteImageCacheKey(url: normalizedURL, headers: effectiveHeaders, variant: variant)
+    }
+    return "\(baseKey)|animated|\(max(1, clampedInt(maximumPixelSize.rounded(.up))))"
 }
 
 struct CachedRemoteImageCandidates<Content: View, Placeholder: View>: View {
@@ -1305,6 +1327,15 @@ struct CachedAnimatedRemoteImageCandidates<Placeholder: View>: View {
         self.candidates = candidates
         self.maximumPixelSize = maximumPixelSize
         self.placeholder = placeholder
+        let cached = candidates.enumerated().compactMap { index, candidate -> (Int, RemoteAnimatedImage)? in
+            guard let key = animatedRemoteImageCacheKey(
+                for: candidate,
+                maximumPixelSize: maximumPixelSize
+            ), let image = RemoteAnimatedImageCache.shared.image(for: key) else { return nil }
+            return (index, image)
+        }.first
+        _candidateIndex = State(initialValue: cached?.0 ?? 0)
+        _loadedImage = State(initialValue: cached?.1)
     }
 
     var body: some View {
@@ -1318,7 +1349,6 @@ struct CachedAnimatedRemoteImageCandidates<Placeholder: View>: View {
         .task(id: requestKey, priority: .utility) { await loadCurrentCandidate() }
         .onChange(of: candidateKey) { _, _ in
             candidateIndex = 0
-            loadedImage = nil
         }
     }
 
@@ -1330,7 +1360,6 @@ struct CachedAnimatedRemoteImageCandidates<Placeholder: View>: View {
     }
 
     @MainActor private func loadCurrentCandidate() async {
-        loadedImage = nil
         guard candidateIndex < candidates.count else { return }
 
         if candidateIndex == 0, await loadFirstPersistedCandidate() {
@@ -1343,9 +1372,13 @@ struct CachedAnimatedRemoteImageCandidates<Placeholder: View>: View {
             return
         }
         let effectiveHeaders = remoteImageHeaders(for: normalizedURL, additional: candidate.headers)
-        let variant = candidate.prefersLinkedMediaPoster ? "linked-media-poster" : ""
-        let dataCacheKey = remoteImageCacheKey(url: normalizedURL, headers: effectiveHeaders, variant: variant)
-        let decodedCacheKey = "\(dataCacheKey)|animated|\(max(1, clampedInt(maximumPixelSize.rounded(.up))))"
+        guard let decodedCacheKey = animatedRemoteImageCacheKey(
+            for: candidate,
+            maximumPixelSize: maximumPixelSize
+        ) else {
+            advanceCandidate()
+            return
+        }
         if let cached = RemoteAnimatedImageCache.shared.image(for: decodedCacheKey) {
             loadedImage = cached
             return
@@ -1384,41 +1417,40 @@ struct CachedAnimatedRemoteImageCandidates<Placeholder: View>: View {
     }
 
     @MainActor private func loadFirstPersistedCandidate() async -> Bool {
-        // Candidate order is authoritative. Restoring a cached lower-priority
-        // image here prevented a newly preferred /icons/ resource from ever
-        // being requested, so only restore the first candidate at this stage.
-        // Later candidates still use their persistent cache after an actual
-        // failure advances the index.
-        guard let candidate = candidates.first,
-              let persistentCacheID = candidate.persistentCacheID,
-              let normalizedURL = URL(string: normalizedRemoteImageURL(candidate.url.absoluteString)) else {
-            return false
-        }
-        let effectiveHeaders = remoteImageHeaders(for: normalizedURL, additional: candidate.headers)
-        guard let data = await RemoteImageDataCache.shared.persistentData(
-            for: persistentCacheID,
-            requestURL: normalizedURL,
-            headers: effectiveHeaders
-        ) else { return false }
-        let variant = candidate.prefersLinkedMediaPoster ? "linked-media-poster" : ""
-        let dataCacheKey = remoteImageCacheKey(url: normalizedURL, headers: effectiveHeaders, variant: variant)
-        let decodedCacheKey = "\(dataCacheKey)|animated|\(max(1, clampedInt(maximumPixelSize.rounded(.up))))"
-        if let cached = RemoteAnimatedImageCache.shared.image(for: decodedCacheKey) {
-            loadedImage = cached
+        for (index, candidate) in candidates.enumerated() {
+            guard !Task.isCancelled,
+                  let persistentCacheID = candidate.persistentCacheID,
+                  let normalizedURL = URL(string: normalizedRemoteImageURL(candidate.url.absoluteString)),
+                  let decodedCacheKey = animatedRemoteImageCacheKey(
+                    for: candidate,
+                    maximumPixelSize: maximumPixelSize
+                  ) else { continue }
+            if let cached = RemoteAnimatedImageCache.shared.image(for: decodedCacheKey) {
+                candidateIndex = index
+                loadedImage = cached
+                return true
+            }
+            let effectiveHeaders = remoteImageHeaders(for: normalizedURL, additional: candidate.headers)
+            guard let data = await RemoteImageDataCache.shared.persistentData(
+                for: persistentCacheID,
+                requestURL: normalizedURL,
+                headers: effectiveHeaders
+            ) else { continue }
+            let pixelSize = maximumPixelSize
+            let decoded = await Task.detached(priority: .utility) {
+                RemoteAnimatedImage(data: data, cacheKey: decodedCacheKey, maximumPixelSize: pixelSize)
+            }.value
+            guard !Task.isCancelled else { return false }
+            guard let decoded else {
+                await RemoteImageDataCache.shared.removePersistentData(for: persistentCacheID)
+                continue
+            }
+            RemoteAnimatedImageCache.shared.insert(decoded, for: decodedCacheKey)
+            candidateIndex = index
+            loadedImage = decoded
             return true
         }
-        let pixelSize = maximumPixelSize
-        let decoded = await Task.detached(priority: .utility) {
-            RemoteAnimatedImage(data: data, cacheKey: decodedCacheKey, maximumPixelSize: pixelSize)
-        }.value
-        guard !Task.isCancelled else { return false }
-        guard let decoded else {
-            await RemoteImageDataCache.shared.removePersistentData(for: persistentCacheID)
-            return false
-        }
-        RemoteAnimatedImageCache.shared.insert(decoded, for: decodedCacheKey)
-        loadedImage = decoded
-        return true
+        return false
     }
 }
 
@@ -2379,7 +2411,7 @@ struct FlowingSymbolBadge: View {
     var size: CGFloat = 38
     var showsProgress = false
     var usesSolidFill = true
-    var showsFlowEffect = true
+    var showsFlowEffect = false
 
     private var cornerRadius: CGFloat { max(5, size * 0.2) }
     private var glowLineWidth: CGFloat { max(1.15, size * 0.05) }
@@ -2428,21 +2460,12 @@ struct FlowingSymbolBadge: View {
 }
 
 struct FlowingCircleBorder: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.harvestFlowEffectsPaused) private var flowEffectsPaused
-
     let color: Color
     var lineWidth: CGFloat = 1.8
 
     var body: some View {
-        HardwareFlowingBorder(
-            color: color,
-            lineWidth: lineWidth,
-            cornerRadius: 0,
-            circular: true,
-            phaseOffset: 0,
-            paused: reduceMotion || flowEffectsPaused
-        )
+        Circle()
+            .stroke(color.opacity(0.28), lineWidth: lineWidth)
         .allowsHitTesting(false)
     }
 }
@@ -2486,7 +2509,7 @@ private final class HardwareFlowingBorderView: UIView {
     private var borderCornerRadius: CGFloat = 0
     private var isCircular = false
     private var phaseOffset = 0.0
-    private var animationPaused = false
+    private var animationPaused = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2570,7 +2593,7 @@ private final class HardwareFlowingBorderView: UIView {
         borderCornerRadius = cornerRadius
         isCircular = circular
         self.phaseOffset = phaseOffset
-        animationPaused = paused
+        animationPaused = true
         gradientLayer.colors = isCircular
             ? [
                 color.withAlphaComponent(0).cgColor,
@@ -2603,34 +2626,11 @@ private final class HardwareFlowingBorderView: UIView {
 
     private func restartAnimationIfNeeded(force: Bool = false) {
         guard window != nil, !bounds.isEmpty else { return }
-        if animationPaused {
-            stopAnimating()
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            gradientLayer.setAffineTransform(
-                CGAffineTransform(rotationAngle: (42 + phaseOffset) * .pi / 180)
-            )
-            CATransaction.commit()
-            return
-        }
-        if !force, gradientLayer.animation(forKey: "harvest.flowing-border") != nil { return }
         stopAnimating()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        gradientLayer.setAffineTransform(.identity)
+        gradientLayer.setAffineTransform(CGAffineTransform(rotationAngle: (42 + phaseOffset) * .pi / 180))
         CATransaction.commit()
-        let duration = 3.6
-        let elapsed = Date().timeIntervalSinceReferenceDate
-            .truncatingRemainder(dividingBy: duration)
-        let globalPhase = elapsed / duration * Double.pi * 2
-        let animation = CABasicAnimation(keyPath: "transform.rotation.z")
-        animation.fromValue = globalPhase + phaseOffset * .pi / 180
-        animation.byValue = Double.pi * 2
-        animation.duration = duration
-        animation.timingFunction = CAMediaTimingFunction(name: .linear)
-        animation.repeatCount = .infinity
-        animation.isRemovedOnCompletion = false
-        gradientLayer.add(animation, forKey: "harvest.flowing-border")
     }
 }
 
@@ -2675,7 +2675,7 @@ struct HardwareBreathingSymbolBadge: UIViewRepresentable {
 
 final class HardwareBreathingSymbolBadgeView: UIView {
     private let imageView = UIImageView()
-    private var animationPaused = false
+    private var animationPaused = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2707,12 +2707,12 @@ final class HardwareBreathingSymbolBadgeView: UIView {
     }
 
     func configure(icon: String, color: UIColor, paused: Bool) {
-        let needsRestart = animationPaused != paused
-        animationPaused = paused
+        animationPaused = true
         backgroundColor = color
         let configuration = UIImage.SymbolConfiguration(pointSize: 6.5, weight: .bold)
         imageView.image = UIImage(systemName: icon, withConfiguration: configuration)
-        if needsRestart { restartAnimationIfNeeded(force: true) }
+        stopAnimating()
+        layer.opacity = 1
     }
 
     func stopAnimating() {
@@ -2721,29 +2721,14 @@ final class HardwareBreathingSymbolBadgeView: UIView {
 
     private func restartAnimationIfNeeded(force: Bool = false) {
         guard window != nil, !bounds.isEmpty else { return }
-        if animationPaused {
-            stopAnimating()
-            layer.opacity = 1
-            return
-        }
-        if !force, layer.animation(forKey: "harvest.breathing-symbol") != nil { return }
         stopAnimating()
         layer.opacity = 1
-        let animation = CABasicAnimation(keyPath: "opacity")
-        animation.fromValue = 0.3
-        animation.toValue = 1
-        animation.duration = 1.15
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        animation.autoreverses = true
-        animation.repeatCount = .infinity
-        animation.isRemovedOnCompletion = false
-        layer.add(animation, forKey: "harvest.breathing-symbol")
     }
 }
 
 final class HardwareProgressShimmerView: UIView {
     private let shimmerLayer = CAGradientLayer()
-    private var animationPaused = false
+    private var animationPaused = true
     private var previousSize = CGSize.zero
 
     override init(frame: CGRect) {
@@ -2783,8 +2768,7 @@ final class HardwareProgressShimmerView: UIView {
     }
 
     func configure(color: UIColor, paused: Bool) {
-        let needsRestart = animationPaused != paused
-        animationPaused = paused
+        animationPaused = true
         shimmerLayer.colors = [
             color.withAlphaComponent(0).cgColor,
             UIColor.white.withAlphaComponent(0.18).cgColor,
@@ -2793,7 +2777,7 @@ final class HardwareProgressShimmerView: UIView {
             color.withAlphaComponent(0).cgColor
         ]
         shimmerLayer.locations = [0, 0.24, 0.5, 0.74, 1]
-        if needsRestart { restartAnimationIfNeeded(force: true) }
+        stopAnimating()
     }
 
     func stopAnimating() {
@@ -2802,20 +2786,7 @@ final class HardwareProgressShimmerView: UIView {
 
     private func restartAnimationIfNeeded(force: Bool = false) {
         guard window != nil, bounds.width > 2, bounds.height > 0 else { return }
-        if animationPaused {
-            stopAnimating()
-            return
-        }
-        if !force, shimmerLayer.animation(forKey: "harvest.progress-shimmer") != nil { return }
         stopAnimating()
-        let animation = CABasicAnimation(keyPath: "transform.translation.x")
-        animation.fromValue = 0
-        animation.toValue = bounds.width + shimmerLayer.bounds.width * 2
-        animation.duration = 2.2
-        animation.timingFunction = CAMediaTimingFunction(name: .linear)
-        animation.repeatCount = .infinity
-        animation.isRemovedOnCompletion = false
-        shimmerLayer.add(animation, forKey: "harvest.progress-shimmer")
     }
 }
 
@@ -2846,37 +2817,6 @@ struct LoadingState: View {
             HarvestSkeletonCard(rows: 3)
         }
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .top)
-    }
-}
-
-struct SessionCacheBanner: View {
-    let cachedAt: Date?
-
-    var body: some View {
-        HStack(spacing: 9) {
-            SymbolBadge(icon: "externaldrive.badge.clock", color: HarvestTheme.green, size: 30)
-            Text(message)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(HarvestTheme.green)
-                .lineLimit(2)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 10)
-        .background(
-            HarvestTheme.green.opacity(0.09),
-            in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
-                .stroke(HarvestTheme.green.opacity(0.20))
-        )
-        .accessibilityElement(children: .combine)
-    }
-
-    private var message: String {
-        guard let cachedAt else { return "当前页面使用上次缓存数据" }
-        return "当前页面使用上次缓存数据 · \(cachedAt.formatted(date: .abbreviated, time: .shortened))"
     }
 }
 

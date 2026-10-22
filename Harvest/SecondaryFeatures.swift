@@ -335,11 +335,6 @@ struct TasksView: View {
             if model.isLoading { LoadingState() }
             else {
                 List {
-                    if model.usingCachedData && model.mode != "TG 签到" {
-                        SessionCacheBanner(cachedAt: model.cachedAt)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    }
                     Section {
                         Picker("视图", selection: $model.mode) {
                             Text("计划").tag("计划")
@@ -458,7 +453,10 @@ struct TasksView: View {
         .task {
             telegramController.configureNotificationForwarding(appState)
             telegramController.resumeForegroundScheduling()
-            if model.isLoading { await model.load(appState) }
+            if model.isLoading, appState.beginInitialPageLoad("tasks") {
+                await model.load(appState)
+                appState.finishInitialPageLoad("tasks", success: !Task.isCancelled)
+            }
         }
         .onDisappear { telegramController.stopForegroundScheduling() }
         .onChange(of: appState.refreshGeneration) { _, _ in Task { await model.load(appState) } }
@@ -3620,6 +3618,7 @@ struct SearchView: View {
     @State private var showResourceFilters = false
     @State private var activeSearchTask: Task<Void, Never>?
     @State private var isResourceLogExpanded = true
+    @State private var didLoadInitialSites = false
     @FocusState private var searchFieldFocused: Bool
     let onClose: () -> Void
     let onVisibilityChanged: (Bool) -> Void
@@ -3843,9 +3842,16 @@ struct SearchView: View {
             // the search can still start with an empty site selection and the
             // rows will re-resolve their image/authentication candidates when
             // the site list arrives.
-            let loadTask = Task { await model.loadSites(appState) }
-            consumePendingResourceSearch()
-            await loadTask.value
+            let shouldLoadSites = !didLoadInitialSites && appState.beginInitialPageLoad("search")
+            didLoadInitialSites = didLoadInitialSites || shouldLoadSites
+            if shouldLoadSites {
+                let loadTask = Task { await model.loadSites(appState) }
+                consumePendingResourceSearch()
+                await loadTask.value
+                appState.finishInitialPageLoad("search", success: !Task.isCancelled)
+            } else {
+                consumePendingResourceSearch()
+            }
         }
         .onChange(of: appState.sessionGeneration) { _, _ in
             Task { await model.loadSites(appState) }
@@ -6040,9 +6046,6 @@ struct NewsView: View {
                             Spacer(minLength: 0)
                         }
                     }
-                    if usingCachedData {
-                        SessionCacheBanner(cachedAt: cachedAt)
-                    }
                     if !appState.mediaTMDBEnabled && !appState.mediaDoubanEnabled {
                         EmptyState(
                             icon: "film.stack",
@@ -6088,7 +6091,10 @@ struct NewsView: View {
         }
         .task {
             selectOnlyEnabledSource()
-            if isLoading { await load() }
+            if isLoading, appState.beginInitialPageLoad("news") {
+                await load()
+                appState.finishInitialPageLoad("news", success: !Task.isCancelled)
+            }
         }
         .onChange(of: appState.refreshGeneration) { _, _ in Task { await load(forceRefresh: true) } }
         .onChange(of: selectedSource) { _, _ in

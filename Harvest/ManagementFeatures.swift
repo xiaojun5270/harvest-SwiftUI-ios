@@ -53,11 +53,6 @@ struct NoticeView: View {
                 else if notices.isEmpty { EmptyState(icon: "bell.slash", title: "没有消息", detail: "站点公告、任务结果和系统提醒会出现在这里") }
                 else {
                     List {
-                        if usingCachedData {
-                            SessionCacheBanner(cachedAt: cachedAt)
-                                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                                .listRowBackground(Color.clear)
-                        }
                         ForEach(notices) { notice in
                             Button { selectedNotice = notice } label: { NoticeRow(item: notice) }
                                 .buttonStyle(.plain)

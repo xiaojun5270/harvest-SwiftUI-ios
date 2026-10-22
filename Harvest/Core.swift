@@ -1375,6 +1375,8 @@ final class AppState: ObservableObject {
     private var accessTokenRefresh: (id: UUID, task: Task<Void, Error>)?
     private var manualTasks: [UUID: ManualTaskFeedback] = [:]
     private var manualTaskOrder: [UUID] = []
+    private var initialPageLoadsInProgress: Set<String> = []
+    private var initialPageLoadsCompleted: Set<String> = []
 
     var colorScheme: ColorScheme? { appearance.scheme }
     var loginHistory: [LoginRecord] { loadLoginHistory() }
@@ -1390,6 +1392,22 @@ final class AppState: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return "\(normalizeServer(baseURL))|\(username)"
+    }
+
+    @discardableResult
+    func beginInitialPageLoad(_ page: String) -> Bool {
+        let key = "\(sessionGeneration):\(page)"
+        guard !initialPageLoadsCompleted.contains(key), !initialPageLoadsInProgress.contains(key) else {
+            return false
+        }
+        initialPageLoadsInProgress.insert(key)
+        return true
+    }
+
+    func finishInitialPageLoad(_ page: String, success: Bool) {
+        let key = "\(sessionGeneration):\(page)"
+        initialPageLoadsInProgress.remove(key)
+        if success { initialPageLoadsCompleted.insert(key) }
     }
 
     init() {
@@ -1609,6 +1627,8 @@ final class AppState: ObservableObject {
         isAuthenticated = false
         isRestoringSession = false
         isBusy = false
+        initialPageLoadsInProgress.removeAll()
+        initialPageLoadsCompleted.removeAll()
         selectedTab = 2
         pendingResourceSearch = nil
         presentedError = nil
@@ -1671,6 +1691,8 @@ final class AppState: ObservableObject {
         do {
             try await loadProfile()
             isAuthenticated = true
+            initialPageLoadsInProgress.removeAll()
+            initialPageLoadsCompleted.removeAll()
             sessionGeneration &+= 1
             await refreshAuthorizationAccess()
             recordAppLog(.info, "已恢复 \(profile?.username ?? "用户") 的登录会话")
