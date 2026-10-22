@@ -120,6 +120,10 @@ private struct DashboardRawPayload: @unchecked Sendable {
     let value: Any
 }
 
+private struct DashboardSiteUnreadSummary: Sendable {
+    let unread: Int
+}
+
 struct DashboardSnapshot: @unchecked Sendable {
     var uploaded: Double = 0
     var downloaded: Double = 0
@@ -755,6 +759,7 @@ final class DashboardViewModel: ObservableObject {
     private var cacheRestoreTask: Task<Void, Never>?
     private var dashboardLoadInProgress = false
     private var downloaderSpeedTask: Task<Void, Never>?
+    private var siteUnreadTask: Task<Void, Never>?
     private var downloaderSpeedMonitoring = false
     private var downloaders: [DownloaderItem] = []
     private var didLoadOnAppear = false
@@ -795,17 +800,30 @@ final class DashboardViewModel: ObservableObject {
         isLoading = !usingCachedData && !hasDisplayableData
         if usingCachedData || hasDisplayableData { await Task.yield() }
 
+        let cachedSiteUnreadTask = Task {
+            await Self.cachedSiteUnreadSummary(appState)
+        }
         do {
             let raw = try await appState.api(
                 APIPath.dashboard,
                 query: ["days": historyDays],
                 timeoutInterval: 15
             )
-            await applyDashboardPayload(raw, appState: appState, cacheKey: cacheKey)
+            let cachedSiteUnread = await cachedSiteUnreadTask.value
+            await applyDashboardPayload(
+                raw,
+                appState: appState,
+                cacheKey: cacheKey,
+                siteUnreadCount: cachedSiteUnread?.unread
+            )
         } catch {
+            if let cachedSiteUnread = await cachedSiteUnreadTask.value {
+                await applySiteUnreadSummary(cachedSiteUnread, appState: appState, cacheKey: cacheKey)
+            }
             handleDashboardLoadFailure(error, appState: appState)
         }
         guard !Task.isCancelled else { return }
+        startSiteUnreadRefresh(appState, cacheKey: cacheKey)
         Task { [weak self] in
             guard let self else { return }
             async let authorizationLoad: Void = self.loadAuthorization(appState)
@@ -874,12 +892,20 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func applyDashboardPayload(_ raw: Any, appState: AppState, cacheKey: String) async {
+    private func applyDashboardPayload(
+        _ raw: Any,
+        appState: AppState,
+        cacheKey: String,
+        siteUnreadCount: Int?
+    ) async {
         let payload = DashboardRawPayload(value: raw)
         let parsedSnapshot = await Task.detached(priority: .userInitiated) {
             DashboardSnapshot(payload.value)
         }.value
         var updatedSnapshot = parsedSnapshot
+        if let siteUnreadCount {
+            updatedSnapshot.unread = max(0, siteUnreadCount)
+        }
         updatedSnapshot.uploadSpeed = snapshot.uploadSpeed
         updatedSnapshot.downloadSpeed = snapshot.downloadSpeed
         snapshot = updatedSnapshot
@@ -891,6 +917,63 @@ final class DashboardViewModel: ObservableObject {
         isLoading = false
         await Task.yield()
         await appState.writeSessionCache(updatedSnapshot.persistentPayload, name: cacheKey)
+    }
+
+    private func startSiteUnreadRefresh(_ appState: AppState, cacheKey: String) {
+        siteUnreadTask?.cancel()
+        siteUnreadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let raw = try await appState.api(
+                    APIPath.sites,
+                    query: ["cached": true],
+                    timeoutInterval: 12
+                )
+                guard !Task.isCancelled else { return }
+                let payload = DashboardRawPayload(value: raw)
+                let summary = await Task.detached(priority: .utility) {
+                    Self.siteUnreadSummary(payload.value)
+                }.value
+                guard !Task.isCancelled, let summary else { return }
+                await self.applySiteUnreadSummary(summary, appState: appState, cacheKey: cacheKey)
+            } catch {
+                guard !Task.isCancelled, !isDashboardRequestCancellation(error) else { return }
+                recordAppLog(.warning, "仪表盘读取站点未读数失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private static func cachedSiteUnreadSummary(_ appState: AppState) async -> DashboardSiteUnreadSummary? {
+        guard let cached = await appState.readSessionCacheData("site.info.list") else { return nil }
+        let data = cached.payload
+        return await Task.detached(priority: .utility) {
+            guard let raw = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+                return nil
+            }
+            return siteUnreadSummary(raw)
+        }.value
+    }
+
+    nonisolated private static func siteUnreadSummary(_ raw: Any) -> DashboardSiteUnreadSummary? {
+        let sites = jsonRows(raw).map(SiteItem.init)
+        guard !sites.isEmpty else { return nil }
+        let unread = sites.lazy
+            .filter(\.showInDashboard)
+            .reduce(0) { $0 + max(0, $1.unread) }
+        return DashboardSiteUnreadSummary(unread: unread)
+    }
+
+    private func applySiteUnreadSummary(
+        _ summary: DashboardSiteUnreadSummary,
+        appState: AppState,
+        cacheKey: String
+    ) async {
+        let unread = max(0, summary.unread)
+        guard snapshot.unread != unread else { return }
+        snapshot.unread = unread
+        let updatedDate = lastUpdated ?? Date()
+        writeDashboardBootstrapCache(snapshot, appState: appState, cachedAt: updatedDate)
+        await appState.writeSessionCache(snapshot.persistentPayload, name: cacheKey)
     }
 
     private func handleDashboardLoadFailure(_ error: Error, appState: AppState) {

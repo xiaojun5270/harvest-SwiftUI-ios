@@ -719,11 +719,6 @@ private func noticeReportEntries(_ rawSection: String, omittingPlainSuccess: Boo
         template: "\n$1 $2"
     )
     separated = noticeReplacingMatches(
-        "([（(]已重试\\s*\\d+\\s*次[）)])",
-        in: separated,
-        template: "$1\n"
-    )
-    separated = noticeReplacingMatches(
         "(耗时\\s*[:：]?\\s*[0-9]+(?:\\.[0-9]+)?\\s*秒)",
         in: separated,
         template: "$1\n"
@@ -828,11 +823,6 @@ private func formattedNoticeContent(_ rawContent: String) -> String {
         "([。！？])\\s*",
         in: formatted,
         template: "$1\n\n"
-    )
-    formatted = noticeReplacingMatches(
-        "([（(]已重试\\s*\\d+\\s*次[）)])",
-        in: formatted,
-        template: "$1\n"
     )
     return noticeReplacingMatches("\\n{3,}", in: formatted, template: "\n\n")
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -951,48 +941,16 @@ struct SettingsView: View {
     @State private var showingInvite = false
     @State private var selectedBrandMarkItem: PhotosPickerItem?
     @State private var brandMarkStatus = ""
+    private let compactColumns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
+    ]
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    HStack(spacing: 13) {
-                        BrandMark(size: 48)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(privacyMaskedText(appState.profile?.username ?? "Harvest 用户", enabled: appState.privacyMode)).font(.headline)
-                            Text(appState.profile?.email.isEmpty == false
-                                ? privacyMaskedText(appState.profile!.email, enabled: appState.privacyMode)
-                                : appState.baseURL)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }.padding(.vertical, 5)
-                }
-
-                Section("品牌图标") {
-                    HStack(spacing: 14) {
-                        BrandMark(size: 58)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(BrandMarkStore.hasCustomImage ? "自定义图标" : "默认黄金图标")
-                                .font(.subheadline.weight(.semibold))
-                            Text("用于页面左上角、登录页和应用内启动页")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    PhotosPicker(selection: $selectedBrandMarkItem, matching: .images) {
-                        Label("选择自定义图标", systemImage: "photo.badge.plus")
-                    }
-                    if BrandMarkStore.hasCustomImage {
-                        Button(role: .destructive) {
-                            BrandMarkStore.restoreDefault()
-                            brandMarkStatus = "已恢复默认黄金图标"
-                        } label: {
-                            Label("恢复默认图标", systemImage: "arrow.counterclockwise")
-                        }
-                    }
+                    profileAndBrandRow
                     if !brandMarkStatus.isEmpty {
                         Text(brandMarkStatus)
                             .font(.caption)
@@ -1001,32 +959,11 @@ struct SettingsView: View {
                 }
 
                 Section("外观与隐私") {
-                    Picker("显示模式", selection: Binding(get: { appState.appearance }, set: appState.setAppearance)) { ForEach(AppAppearance.allCases) { Text($0.rawValue).tag($0) } }
-                    Picker("强调色", selection: Binding(get: { appState.accent }, set: appState.setAccent)) {
-                        ForEach(AppAccent.allCases) { accent in
-                            Label {
-                                Text(accent.title)
-                            } icon: {
-                                Circle().fill(accent.color).frame(width: 12, height: 12)
-                            }
-                            .tag(accent)
-                        }
-                    }
-                    Picker("界面密度", selection: Binding(get: { appState.interfaceDensity }, set: appState.setInterfaceDensity)) {
-                        ForEach(AppInterfaceDensity.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Picker("界面字号", selection: Binding(get: { appState.interfaceScale }, set: appState.setInterfaceScale)) {
-                        ForEach(AppInterfaceScale.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Toggle(isOn: Binding(get: { appState.privacyMode }, set: appState.setPrivacyMode)) {
-                        Label("隐藏站点名称、用户名和邮箱", systemImage: "eye.slash")
-                    }
-                    Button { appState.resetAppearanceSettings() } label: {
-                        Label("恢复默认外观", systemImage: "arrow.counterclockwise")
-                    }
+                    appearanceGrid
+                    privacyAndResetRow
                 }
 
-                Section("账号") {
+                Section("账号与内容") {
                     NavigationLink {
                         AccountSwitcherView().environmentObject(appState)
                     } label: {
@@ -1037,74 +974,38 @@ struct SettingsView: View {
                             Label("邀请用户", systemImage: "envelope.badge.person.crop")
                         }
                     }
-                }
-
-                Section("资讯页内容") {
-                    Toggle("显示 TMDB", isOn: Binding(get: { appState.mediaTMDBEnabled }, set: appState.setMediaTMDBEnabled))
-                    Toggle("显示豆瓣", isOn: Binding(get: { appState.mediaDoubanEnabled }, set: appState.setMediaDoubanEnabled))
+                    mediaToggleGrid
                 }
 
                 Section("自动刷新") {
-                    Stepper(
-                        value: Binding(get: { appState.autoRefreshMinutes }, set: appState.setAutoRefreshMinutes),
-                        in: 1...1_440
-                    ) {
-                        LabeledContent("刷新间隔", value: "\(appState.autoRefreshMinutes) 分钟")
-                    }
-                    Menu("常用间隔") {
-                        ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
-                            Button("\(minutes) 分钟") { appState.setAutoRefreshMinutes(minutes) }
-                        }
-                    }
+                    refreshIntervalRow
                 }
 
                 Section("管理") {
-                    if appState.profile?.isSuperuser == true {
-                        NavigationLink { TasksView().environmentObject(appState) } label: {
-                            Label("任务中心", systemImage: "checklist")
-                        }
-                    }
-                    NavigationLink { BackendOptionsView().environmentObject(appState) } label: { Label("后端配置", systemImage: "slider.horizontal.3") }
-                    NavigationLink { NotificationToolsView().environmentObject(appState) } label: { Label("通知与机器人", systemImage: "bell.and.waves.left.and.right") }
-                    NavigationLink { UserManagementView().environmentObject(appState) } label: { Label("用户中心", systemImage: "person.2") }
-                    if appState.profile?.isSuperuser == true && appState.canOpenAdminUsers {
-                        NavigationLink { AdminView().environmentObject(appState) } label: { Label("授权管理", systemImage: "person.badge.key") }
-                    }
-                    NavigationLink { LogView().environmentObject(appState) } label: { Label("日志中心", systemImage: "doc.text.magnifyingglass") }
-                    NavigationLink { SafariExtensionSettingsView() } label: {
-                        Label("Safari 扩展", systemImage: "safari.fill")
-                    }
-                    NavigationLink {
-                        NativeBrowserView(urlString: appState.baseURL, title: "服务页面")
-                            .navigationTitle("服务页面")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: { Label("服务页面", systemImage: "safari") }
+                    managementGrid
                 }
 
                 Section("维护") {
-                    NavigationLink { DataMaintenanceView().environmentObject(appState) } label: { Label("备份与迁移", systemImage: "externaldrive.badge.timemachine") }
-                    NavigationLink { UpdateMaintenanceView().environmentObject(appState) } label: { Label("更新与网络", systemImage: "arrow.triangle.2.circlepath") }
-                    Button {
-                        Task {
-                            _ = await appState.perform(
-                                APIPath.cacheClear,
-                                method: .get,
-                                query: ["key": "my_site_list"]
-                            )
-                        }
-                    } label: { Label("清理站点缓存", systemImage: "trash.slash") }
-                    Button { Task { _ = await appState.perform(APIPath.notifyTest, method: .get, query: ["title": "Harvest", "content": "原生客户端通知测试", "push_type": ""]); } } label: { Label("发送测试通知", systemImage: "bell.badge") }
-                    if appState.profile?.isSuperuser == true { Button(role: .destructive) { confirmingRestart = true } label: { Label("重启服务", systemImage: "arrow.clockwise.circle") } }
+                    maintenanceGrid
                 }
 
                 Section("关于") {
-                    LabeledContent("客户端", value: "iOS 原生版")
-                    LabeledContent("版本", value: appVersionLabel)
-                    LabeledContent("系统要求", value: "iOS 17+")
+                    HStack(spacing: 8) {
+                        Label("Harvest iOS", systemImage: "info.circle.fill")
+                        Spacer(minLength: 8)
+                        Text("\(appVersionLabel) · iOS 17+")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+                    .font(.subheadline)
                 }
 
                 Section { Button(role: .destructive) { confirmingLogout = true } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right").frame(maxWidth: .infinity) } }
             }
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(8)
+            .environment(\.defaultMinListRowHeight, 38)
             .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(isPresented: $showingInvite) {
@@ -1118,6 +1019,281 @@ struct SettingsView: View {
             .confirmationDialog("确定退出当前账号？", isPresented: $confirmingLogout, titleVisibility: .visible) { Button("退出登录", role: .destructive) { dismiss(); appState.logout() } }
             .confirmationDialog("确定重启 Harvest 服务？", isPresented: $confirmingRestart, titleVisibility: .visible) { Button("重启服务", role: .destructive) { Task { _ = await appState.perform(APIPath.serverRestart, method: .get) } } }
         }
+    }
+
+    private var profileAndBrandRow: some View {
+        HStack(spacing: 10) {
+            BrandMark(size: 42)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(privacyMaskedText(appState.profile?.username ?? "Harvest 用户", enabled: appState.privacyMode))
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(appState.profile?.email.isEmpty == false
+                    ? privacyMaskedText(appState.profile!.email, enabled: appState.privacyMode)
+                    : appState.baseURL)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            PhotosPicker(selection: $selectedBrandMarkItem, matching: .images) {
+                settingsIconButton("photo.badge.plus", color: HarvestTheme.blue)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("选择自定义图标")
+            .help("选择自定义图标")
+            if BrandMarkStore.hasCustomImage {
+                Button(role: .destructive) {
+                    BrandMarkStore.restoreDefault()
+                    brandMarkStatus = "已恢复默认黄金图标"
+                } label: {
+                    settingsIconButton("arrow.counterclockwise", color: HarvestTheme.coral)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("恢复默认图标")
+                .help("恢复默认图标")
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var appearanceGrid: some View {
+        LazyVGrid(columns: compactColumns, spacing: 8) {
+            Menu {
+                ForEach(AppAppearance.allCases) { appearance in
+                    Button {
+                        appState.setAppearance(appearance)
+                    } label: {
+                        Label(appearance.rawValue, systemImage: appState.appearance == appearance ? "checkmark" : "circle")
+                    }
+                }
+            } label: {
+                SettingsCompactChoiceLabel(
+                    title: "显示模式",
+                    value: appState.appearance.rawValue,
+                    icon: "circle.lefthalf.filled",
+                    color: HarvestTheme.blue
+                )
+            }
+
+            Menu {
+                ForEach(AppAccent.allCases) { accent in
+                    Button {
+                        appState.setAccent(accent)
+                    } label: {
+                        Label(accent.title, systemImage: appState.accent == accent ? "checkmark.circle.fill" : "circle.fill")
+                    }
+                }
+            } label: {
+                SettingsCompactChoiceLabel(
+                    title: "强调色",
+                    value: appState.accent.title,
+                    icon: "paintpalette.fill",
+                    color: appState.accent.color
+                )
+            }
+
+            Menu {
+                ForEach(AppInterfaceDensity.allCases) { density in
+                    Button {
+                        appState.setInterfaceDensity(density)
+                    } label: {
+                        Label(density.rawValue, systemImage: appState.interfaceDensity == density ? "checkmark" : "circle")
+                    }
+                }
+            } label: {
+                SettingsCompactChoiceLabel(
+                    title: "界面密度",
+                    value: appState.interfaceDensity.rawValue,
+                    icon: "rectangle.compress.vertical",
+                    color: HarvestTheme.green
+                )
+            }
+
+            Menu {
+                ForEach(AppInterfaceScale.allCases) { scale in
+                    Button {
+                        appState.setInterfaceScale(scale)
+                    } label: {
+                        Label(scale.rawValue, systemImage: appState.interfaceScale == scale ? "checkmark" : "circle")
+                    }
+                }
+            } label: {
+                SettingsCompactChoiceLabel(
+                    title: "界面字号",
+                    value: appState.interfaceScale.rawValue,
+                    icon: "textformat.size",
+                    color: HarvestTheme.purple
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
+    }
+
+    private var privacyAndResetRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "eye.slash.fill")
+                .foregroundStyle(HarvestTheme.blue)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("隐藏敏感信息")
+                    .font(.subheadline.weight(.medium))
+                Text("站点名称、用户名和邮箱")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            Toggle("", isOn: Binding(get: { appState.privacyMode }, set: appState.setPrivacyMode))
+                .labelsHidden()
+                .controlSize(.small)
+                .accessibilityLabel("隐藏站点名称、用户名和邮箱")
+            Button { appState.resetAppearanceSettings() } label: {
+                settingsIconButton("arrow.counterclockwise", color: HarvestTheme.blue)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("恢复默认外观")
+            .help("恢复默认外观")
+        }
+    }
+
+    private var mediaToggleGrid: some View {
+        LazyVGrid(columns: compactColumns, spacing: 8) {
+            SettingsCompactToggle(
+                title: "TMDB",
+                icon: "film.fill",
+                color: HarvestTheme.blue,
+                isOn: Binding(get: { appState.mediaTMDBEnabled }, set: appState.setMediaTMDBEnabled)
+            )
+            SettingsCompactToggle(
+                title: "豆瓣",
+                icon: "movieclapper.fill",
+                color: HarvestTheme.green,
+                isOn: Binding(get: { appState.mediaDoubanEnabled }, set: appState.setMediaDoubanEnabled)
+            )
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var refreshIntervalRow: some View {
+        HStack(spacing: 8) {
+            Label("刷新间隔", systemImage: "clock.arrow.circlepath")
+                .font(.subheadline.weight(.medium))
+            Spacer(minLength: 4)
+            Menu("\(appState.autoRefreshMinutes) 分钟") {
+                ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
+                    Button("\(minutes) 分钟") { appState.setAutoRefreshMinutes(minutes) }
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            Button {
+                appState.setAutoRefreshMinutes(appState.autoRefreshMinutes - 1)
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .disabled(appState.autoRefreshMinutes <= 1)
+            .accessibilityLabel("减少刷新间隔")
+            Button {
+                appState.setAutoRefreshMinutes(appState.autoRefreshMinutes + 1)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .disabled(appState.autoRefreshMinutes >= 1_440)
+            .accessibilityLabel("增加刷新间隔")
+        }
+    }
+
+    private var managementGrid: some View {
+        LazyVGrid(columns: compactColumns, spacing: 8) {
+            if appState.profile?.isSuperuser == true {
+                NavigationLink { TasksView().environmentObject(appState) } label: {
+                    SettingsCompactDestinationLabel(title: "任务中心", icon: "checklist", color: HarvestTheme.blue)
+                }
+            }
+            NavigationLink { BackendOptionsView().environmentObject(appState) } label: {
+                SettingsCompactDestinationLabel(title: "后端配置", icon: "slider.horizontal.3", color: HarvestTheme.green)
+            }
+            NavigationLink { NotificationToolsView().environmentObject(appState) } label: {
+                SettingsCompactDestinationLabel(title: "通知与机器人", icon: "bell.and.waves.left.and.right", color: HarvestTheme.coral)
+            }
+            NavigationLink { UserManagementView().environmentObject(appState) } label: {
+                SettingsCompactDestinationLabel(title: "用户中心", icon: "person.2", color: HarvestTheme.purple)
+            }
+            if appState.profile?.isSuperuser == true && appState.canOpenAdminUsers {
+                NavigationLink { AdminView().environmentObject(appState) } label: {
+                    SettingsCompactDestinationLabel(title: "授权管理", icon: "person.badge.key", color: HarvestTheme.amber)
+                }
+            }
+            NavigationLink { LogView().environmentObject(appState) } label: {
+                SettingsCompactDestinationLabel(title: "日志中心", icon: "doc.text.magnifyingglass", color: HarvestTheme.blue)
+            }
+            NavigationLink { SafariExtensionSettingsView() } label: {
+                SettingsCompactDestinationLabel(title: "Safari 扩展", icon: "safari.fill", color: HarvestTheme.blue)
+            }
+            NavigationLink {
+                NativeBrowserView(urlString: appState.baseURL, title: "服务页面")
+                    .navigationTitle("服务页面")
+                    .navigationBarTitleDisplayMode(.inline)
+            } label: {
+                SettingsCompactDestinationLabel(title: "服务页面", icon: "network", color: HarvestTheme.green)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
+    }
+
+    private var maintenanceGrid: some View {
+        LazyVGrid(columns: compactColumns, spacing: 8) {
+            NavigationLink { DataMaintenanceView().environmentObject(appState) } label: {
+                SettingsCompactDestinationLabel(title: "备份与迁移", icon: "externaldrive.badge.timemachine", color: HarvestTheme.blue)
+            }
+            NavigationLink { UpdateMaintenanceView().environmentObject(appState) } label: {
+                SettingsCompactDestinationLabel(title: "更新与网络", icon: "arrow.triangle.2.circlepath", color: HarvestTheme.green)
+            }
+            Button {
+                Task {
+                    _ = await appState.perform(
+                        APIPath.cacheClear,
+                        method: .get,
+                        query: ["key": "my_site_list"]
+                    )
+                }
+            } label: {
+                SettingsCompactDestinationLabel(title: "清理站点缓存", icon: "trash.slash", color: HarvestTheme.amber)
+            }
+            Button {
+                Task {
+                    _ = await appState.perform(
+                        APIPath.notifyTest,
+                        method: .get,
+                        query: ["title": "Harvest", "content": "原生客户端通知测试", "push_type": ""]
+                    )
+                }
+            } label: {
+                SettingsCompactDestinationLabel(title: "测试通知", icon: "bell.badge", color: HarvestTheme.blue)
+            }
+            if appState.profile?.isSuperuser == true {
+                Button(role: .destructive) { confirmingRestart = true } label: {
+                    SettingsCompactDestinationLabel(title: "重启服务", icon: "arrow.clockwise.circle", color: HarvestTheme.coral)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
+    }
+
+    private func settingsIconButton(_ icon: String, color: Color) -> some View {
+        Image(systemName: icon)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(color)
+            .frame(width: 32, height: 32)
+            .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     @MainActor
@@ -1139,6 +1315,90 @@ struct SettingsView: View {
         let version = (info["CFBundleShortVersionString"] as? String) ?? "--"
         let build = (info["CFBundleVersion"] as? String) ?? "--"
         return "\(version) (\(build))"
+    }
+}
+
+private struct SettingsCompactChoiceLabel: View {
+    let title: String
+    let value: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(color)
+                .frame(width: 27, height: 27)
+                .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            Spacer(minLength: 2)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+}
+
+private struct SettingsCompactToggle: View {
+    let title: String
+    let icon: String
+    let color: Color
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .tint(color)
+        .controlSize(.small)
+        .padding(.horizontal, 9)
+        .frame(maxWidth: .infinity, minHeight: 42)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+}
+
+private struct SettingsCompactDestinationLabel: View {
+    let title: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(color)
+                .frame(width: 27, height: 27)
+                .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }
 

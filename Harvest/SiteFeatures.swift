@@ -3924,9 +3924,6 @@ struct SiteRow: View {
 
     private var compactAccountSummary: some View {
         HStack(spacing: 3) {
-            if site.notice > 0 {
-                SiteHeaderCompactMetric(icon: "bell.fill", label: "通知", value: "\(site.notice)", color: HarvestTheme.coral, breathes: true)
-            }
             if site.unread > 0 {
                 SiteHeaderCompactMetric(icon: "bell.badge.fill", label: "未读", value: "\(site.unread)", color: HarvestTheme.coral, breathes: true)
             }
@@ -3942,7 +3939,7 @@ struct SiteRow: View {
     }
 
     private var hasCompactAccountSummary: Bool {
-        site.invitations > 0 || site.mail > 0 || site.notice > 0 || site.unread > 0
+        site.invitations > 0 || site.mail > 0 || site.unread > 0
     }
 
     private var hasHRContent: Bool {

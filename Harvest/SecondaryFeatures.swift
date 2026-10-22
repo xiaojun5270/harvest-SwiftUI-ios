@@ -320,11 +320,8 @@ final class TasksViewModel: ObservableObject {
 struct TasksView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var model = TasksViewModel()
-    @StateObject private var telegramStore = TelegramCheckinStore.shared
-    @StateObject private var telegramController = TelegramSessionController.shared
     @State private var showEditor = false
     @State private var editingTask: TaskItem?
-    @State private var editingTelegramBot: TelegramCheckinBot?
     @State private var selectedResult: TaskResultItem?
     @State private var confirmClearResults = false
     @State private var deletingTask: TaskItem?
@@ -338,7 +335,6 @@ struct TasksView: View {
                     Section {
                         Picker("视图", selection: $model.mode) {
                             Text("计划").tag("计划")
-                            Text("TG 签到").tag("TG 签到")
                             Text("执行记录").tag("执行记录")
                         }
                         .pickerStyle(.segmented)
@@ -368,41 +364,6 @@ struct TasksView: View {
                                 }
                             }
                         }
-                    } else if model.mode == "TG 签到" {
-                        if telegramStore.bots.isEmpty {
-                            EmptyState(
-                                icon: "paperplane.circle",
-                                title: "没有 TG 签到任务",
-                                detail: "请先在站点页添加或自动识别 Telegram Bot"
-                            )
-                            .frame(minHeight: 320)
-                            .listRowBackground(Color.clear)
-                        } else {
-                            ForEach(telegramStore.bots) { bot in
-                                TelegramScheduleTaskRow(
-                                    bot: bot,
-                                    isRunning: telegramController.isRunning(bot.id),
-                                    onRun: { Task { await runTelegramBot(bot) } }
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture { editingTelegramBot = bot }
-                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button { toggleTelegramSchedule(bot) } label: {
-                                        Label(
-                                            bot.scheduleEnabled ? "停用" : "启用",
-                                            systemImage: bot.scheduleEnabled ? "pause" : "play"
-                                        )
-                                    }
-                                    .tint(bot.scheduleEnabled ? HarvestTheme.amber : HarvestTheme.green)
-                                }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button { editingTelegramBot = bot } label: {
-                                        Label("编辑", systemImage: "pencil")
-                                    }
-                                    .tint(HarvestTheme.blue)
-                                }
-                            }
-                        }
                     } else {
                         if model.results.isEmpty {
                             EmptyState(icon: "clock.badge.questionmark", title: "没有执行记录", detail: "任务执行后可在此查看结果")
@@ -427,13 +388,7 @@ struct TasksView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
-                .refreshable {
-                    if model.mode == "TG 签到" {
-                        await telegramController.refreshConfiguredBots()
-                    } else {
-                        await model.load(appState)
-                    }
-                }
+                .refreshable { await model.load(appState) }
             }
         }
         .navigationTitle("任务中心").navigationBarTitleDisplayMode(.inline)
@@ -451,21 +406,14 @@ struct TasksView: View {
             }
         }
         .task {
-            telegramController.configureNotificationForwarding(appState)
-            telegramController.resumeForegroundScheduling()
             if model.isLoading, appState.beginInitialPageLoad("tasks") {
                 await model.load(appState)
                 appState.finishInitialPageLoad("tasks", success: !Task.isCancelled)
             }
         }
-        .onDisappear { telegramController.stopForegroundScheduling() }
         .onChange(of: appState.refreshGeneration) { _, _ in Task { await model.load(appState) } }
         .sheet(isPresented: $showEditor) { TaskEditorSheet(taskTypes: model.taskTypes, crontabs: model.crontabs) { await model.load(appState) }.environmentObject(appState) }
         .sheet(item: $editingTask) { task in TaskEditorSheet(task: task, taskTypes: model.taskTypes, crontabs: model.crontabs) { await model.load(appState) }.environmentObject(appState) }
-        .sheet(item: $editingTelegramBot) { bot in
-            TelegramScheduleEditorSheet(bot: bot) { telegramStore.saveBot($0) }
-                .presentationDetents([.large])
-        }
         .sheet(item: $selectedResult) { result in
             TaskResultDetailSheet(
                 result: result,
@@ -517,26 +465,6 @@ struct TasksView: View {
         }
     }
 
-    private func toggleTelegramSchedule(_ bot: TelegramCheckinBot) {
-        var updated = bot
-        updated.scheduleEnabled.toggle()
-        if updated.scheduleEnabled { updated.isEnabled = true }
-        telegramStore.saveBot(updated)
-    }
-
-    private func runTelegramBot(_ bot: TelegramCheckinBot) async {
-        let feedbackID = appState.beginManualTask("正在执行 TG 签到：\(bot.displayName)")
-        do {
-            let result = try await telegramController.run(botID: bot.id, trigger: .manual)
-            appState.finishManualTask(
-                feedbackID,
-                success: result.status.isSuccessful,
-                message: "\(bot.displayName)：\(result.response)"
-            )
-        } catch {
-            appState.finishManualTask(feedbackID, success: false, message: error.localizedDescription)
-        }
-    }
 }
 
 struct TaskRow: View {

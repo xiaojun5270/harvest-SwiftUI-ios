@@ -612,76 +612,6 @@ private struct DownloaderSpeedEventSnapshot: @unchecked Sendable {
     let event: [String: Any]?
 }
 
-private struct DownloaderCountSummary: Sendable {
-    let active: Int
-    let paused: Int
-    let total: Int
-}
-
-private struct DownloaderCountPayload: @unchecked Sendable {
-    let value: Any
-}
-
-private func downloaderCountRows(_ value: Any, depth: Int = 0) -> [[String: Any]] {
-    guard depth < 6 else { return [] }
-    if let rows = value as? [[String: Any]] { return rows }
-    guard let dictionary = jsonDictionary(value) else { return [] }
-    for key in ["torrents", "items", "list", "rows", "records"] {
-        if let rows = dictionary[key] as? [[String: Any]] { return rows }
-        if let keyedRows = dictionary[key] as? [String: Any] {
-            let rows = keyedRows.compactMap { key, value -> [String: Any]? in
-                guard var row = value as? [String: Any] else { return nil }
-                if row["hash"] == nil && row["hashString"] == nil { row["hash"] = key }
-                return row
-            }
-            if !rows.isEmpty { return rows }
-        }
-    }
-    for key in ["data", "result"] {
-        guard let nested = dictionary[key] else { continue }
-        let rows = downloaderCountRows(nested, depth: depth + 1)
-        if !rows.isEmpty { return rows }
-    }
-    return jsonRows(value).filter { row in
-        row.string("hashString", "hash_string", "hash", "name", "title") != nil
-            || row.string("state", "status") != nil
-    }
-}
-
-private func downloaderCountSummary(_ value: Any, category: String) -> DownloaderCountSummary {
-    let root = jsonDictionary(value) ?? [:]
-    let rows = downloaderCountRows(value)
-    let reportedTotal = max(0, downloaderMetricInt(root, keys: downloaderTotalCountKeys) ?? 0)
-    let reportedActive = max(0, downloaderMetricInt(root, keys: downloaderActiveCountKeys) ?? 0)
-    let reportedPaused = max(0, downloaderMetricInt(root, keys: downloaderPausedCountKeys) ?? 0)
-    let derivedActive = rows.reduce(into: 0) { count, row in
-        let downloadSpeed = row.double("rateDownload", "dlspeed", "download_speed", "rate_download") ?? 0
-        let uploadSpeed = row.double("rateUpload", "upspeed", "upload_speed", "rate_upload") ?? 0
-        let state = row.string("state", "status")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let transmissionActive = downloaderIsTransmission(category) && [4, 6].contains(Int(state) ?? -1)
-        let qBittorrentActiveStates = [
-            "downloading", "uploading", "forceddl", "forcedup", "checkingdl", "checkingup", "metadl"
-        ]
-        if downloadSpeed > 0 || uploadSpeed > 0 || transmissionActive || qBittorrentActiveStates.contains(state) {
-            count += 1
-        }
-    }
-    let derivedPaused = rows.reduce(into: 0) { count, row in
-        let state = row.string("state", "status")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if downloaderIsTransmission(category) {
-            if Int(state) == 0 { count += 1 }
-        } else if state.contains("pause") || state.contains("stop") || state.contains("暂停") || state.contains("停止") {
-            count += 1
-        }
-    }
-    let total = max(reportedTotal, rows.count)
-    let activeCandidate = max(reportedActive, derivedActive)
-    let pausedCandidate = max(reportedPaused, derivedPaused)
-    let active = total > 0 ? min(activeCandidate, total) : activeCandidate
-    let paused = total > 0 ? min(pausedCandidate, total) : pausedCandidate
-    return DownloaderCountSummary(active: active, paused: paused, total: total)
-}
-
 private struct TorrentFilterCriteria: @unchecked Sendable {
     let query: String
     let status: String
@@ -892,7 +822,8 @@ final class DownloadsViewModel: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private var cacheWriteTask: Task<Void, Never>?
     private var statusBootstrapTask: Task<Void, Never>?
-    private var countFallbackTask: Task<Void, Never>?
+    private var countRefreshTask: Task<Void, Never>?
+    private var lastCountRefreshAt: Date?
     private var filterRebuildTask: Task<Void, Never>?
     private var metadataRebuildTask: Task<Void, Never>?
     private var filterRebuildGeneration = 0
@@ -920,7 +851,7 @@ final class DownloadsViewModel: ObservableObject {
         countdownTask?.cancel()
         cacheWriteTask?.cancel()
         statusBootstrapTask?.cancel()
-        countFallbackTask?.cancel()
+        countRefreshTask?.cancel()
         filterRebuildTask?.cancel()
         metadataRebuildTask?.cancel()
     }
@@ -1114,7 +1045,7 @@ final class DownloadsViewModel: ObservableObject {
                 sites = []
                 scheduleCachePersistence(appState)
                 if !isWatching { scheduleStatusBootstrap(appState) }
-                scheduleCountFallback(appState)
+                scheduleCountRefresh(appState, force: true)
                 return
             }
             let previousTorrents = torrents
@@ -1640,8 +1571,8 @@ final class DownloadsViewModel: ObservableObject {
         isViewActive = false
         statusBootstrapTask?.cancel()
         statusBootstrapTask = nil
-        countFallbackTask?.cancel()
-        countFallbackTask = nil
+        countRefreshTask?.cancel()
+        countRefreshTask = nil
         resolvingCountIDs = []
         stopActiveWatching(clearRemaining: true)
     }
@@ -1739,65 +1670,90 @@ final class DownloadsViewModel: ObservableObject {
         }
     }
 
-    private func scheduleCountFallback(_ appState: AppState) {
-        countFallbackTask?.cancel()
+    private func scheduleCountRefresh(_ appState: AppState, force: Bool = false) {
+        guard countRefreshTask == nil else { return }
+        if !force,
+           let lastCountRefreshAt,
+           Date().timeIntervalSince(lastCountRefreshAt) < 60 {
+            return
+        }
         let reference = WeakReference(self)
-        countFallbackTask = Task {
-            do { try await Task.sleep(for: .milliseconds(700)) }
-            catch { return }
+        countRefreshTask = Task {
+            if force {
+                do { try await Task.sleep(for: .milliseconds(350)) }
+                catch { return }
+            }
             guard let model = reference.value, !Task.isCancelled else { return }
-            let candidates = model.downloaders.filter {
-                $0.enabled && (
-                    $0.totalTorrentCount == 0
-                        || downloaderMetricInt($0.raw, keys: downloaderTotalCountKeys) == nil
-                        || (downloaderMetricInt($0.raw, keys: downloaderActiveCountKeys) == nil
-                            && ($0.uploadSpeed > 0 || $0.downloadSpeed > 0))
-                )
+            let candidates = model.downloaders.filter { downloader in
+                guard downloader.enabled else { return false }
+                if force { return true }
+                guard let live = model.liveStatus(for: downloader) else { return true }
+                return downloaderMetricInt(live, keys: downloaderTotalCountKeys) == nil
+                    || downloaderMetricInt(live, keys: downloaderActiveCountKeys) == nil
+            }
+            guard !candidates.isEmpty else {
+                model.lastCountRefreshAt = Date()
+                model.countRefreshTask = nil
+                return
             }
             model.resolvingCountIDs = Set(candidates.map(\.id))
-            for candidate in candidates {
-                guard !Task.isCancelled else { break }
-                do {
-                    let value = try await appState.api(
-                        "\(APIPath.downloaderMain)\(candidate.id)",
-                        timeoutInterval: downloaderIsTransmission(candidate.category) ? 12 : 8
-                    )
-                    let payload = DownloaderCountPayload(value: value)
-                    let category = candidate.category
-                    let summary = await Task.detached(priority: .utility) {
-                        downloaderCountSummary(payload.value, category: category)
-                    }.value
-                    guard !Task.isCancelled else { break }
-                    model.applyDownloaderCountSummary(summary, downloaderID: candidate.id, appState: appState)
-                } catch {
-                    if !isRequestCancellation(error) {
-                        recordAppLog(.warning, "下载器 \(candidate.id) 计数读取失败：\(error.localizedDescription)")
-                    }
+            do {
+                let raw = try await appState.api(
+                    APIPath.downloaders,
+                    query: ["with_status": true],
+                    timeoutInterval: 15
+                )
+                guard !Task.isCancelled else { return }
+                model.applyReportedDownloaderCounts(
+                    jsonRows(raw),
+                    downloaderIDs: Set(candidates.map(\.id)),
+                    appState: appState
+                )
+            } catch {
+                if !isRequestCancellation(error) {
+                    recordAppLog(.warning, "下载器实时计数同步失败：\(error.localizedDescription)")
                 }
-                model.resolvingCountIDs.remove(candidate.id)
             }
             model.resolvingCountIDs = []
-            model.countFallbackTask = nil
+            model.lastCountRefreshAt = Date()
+            model.countRefreshTask = nil
         }
     }
 
-    private func applyDownloaderCountSummary(
-        _ summary: DownloaderCountSummary,
-        downloaderID: Int,
+    private func applyReportedDownloaderCounts(
+        _ rows: [[String: Any]],
+        downloaderIDs: Set<Int>,
         appState: AppState
     ) {
-        guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }) else { return }
-        let current = downloaders[index]
-        let merged = mergingDownloaderStatus([
-            "activeTorrentCount": summary.active,
-            "pausedTorrentCount": summary.paused,
-            "torrentCount": summary.total
-        ], into: current.raw)
-        let next = DownloaderItem(merged)
-        guard next.activeTorrentCount != current.activeTorrentCount
-                || next.pausedTorrentCount != current.pausedTorrentCount
-                || next.totalTorrentCount != current.totalTorrentCount else { return }
-        downloaders[index] = next
+        let reportedByID = Dictionary(
+            rows.compactMap { row -> (Int, [String: Any])? in
+                guard let id = row.int("id"), downloaderIDs.contains(id) else { return nil }
+                return (id, row)
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        var updated = downloaders
+        var changed = false
+        for index in updated.indices {
+            let current = updated[index]
+            guard let reported = reportedByID[current.id] else { continue }
+            let active = downloaderMetricInt(reported, keys: downloaderActiveCountKeys)
+            let paused = downloaderMetricInt(reported, keys: downloaderPausedCountKeys)
+            let total = downloaderMetricInt(reported, keys: downloaderTotalCountKeys)
+            guard active != nil || paused != nil || total != nil else { continue }
+            var values: [String: Any] = [:]
+            if let active { values["activeTorrentCount"] = max(0, active) }
+            if let paused { values["pausedTorrentCount"] = max(0, paused) }
+            if let total { values["torrentCount"] = max(0, total) }
+            let next = DownloaderItem(mergingDownloaderStatus(values, into: current.raw))
+            guard next.activeTorrentCount != current.activeTorrentCount
+                    || next.pausedTorrentCount != current.pausedTorrentCount
+                    || next.totalTorrentCount != current.totalTorrentCount else { continue }
+            updated[index] = next
+            changed = true
+        }
+        guard changed else { return }
+        downloaders = updated
         usingCachedData = false
         cachedAt = nil
         scheduleCachePersistence(appState)
@@ -1927,6 +1883,7 @@ final class DownloadsViewModel: ObservableObject {
         guard !liveByKey.isEmpty else { return }
         latestDownloaderSpeedValues = liveByKey
         applyLatestDownloaderSpeedValues(appState: appState)
+        scheduleCountRefresh(appState)
     }
 
     private func applyLatestDownloaderSpeedValues(appState: AppState) {
@@ -2811,106 +2768,57 @@ struct DownloaderCard: View {
         return item.hasLiveStatus && !state.contains("disconnected") && !state.contains("offline")
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 9) {
-                SymbolBadge(
-                    icon: downloaderIcon,
-                    color: accentColor,
-                    size: 38
-                )
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    HStack(spacing: 5) {
-                        Text(downloaderTypeName)
-                        if !item.version.isEmpty { Text(item.version).monospacedDigit() }
-                        Circle()
-                            .fill(connected ? HarvestTheme.green : HarvestTheme.coral)
-                            .frame(width: 6, height: 6)
-                        Text(connected ? "在线" : "离线")
-                            .foregroundStyle(connected ? HarvestTheme.green : HarvestTheme.coral)
-                    }
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                }
-                .layoutPriority(1)
-                Spacer(minLength: 4)
-                Menu {
-                    Button(action: onOpenTorrents) { Label("种子列表", systemImage: "list.bullet.rectangle") }
-                    Button(action: onAddTorrent) { Label("添加种子", systemImage: "link.badge.plus") }
-                    Divider()
-                    Button(action: onEdit) { Label("编辑", systemImage: "pencil") }
-                    Button(action: onSettings) { Label("参数设置", systemImage: "slider.horizontal.3") }
-                    Button(action: onSpeedSettings) { Label("限速设置", systemImage: "gauge.with.dots.needle.67percent") }
-                    Button(action: onConnection) { Label("连接检查", systemImage: "network") }
-                    if !isTransmission {
-                        Button(action: onCategories) { Label("分类管理", systemImage: "tag.square") }
-                        Button(action: onTags) { Label("标签管理", systemImage: "tag") }
-                    }
-                    if !item.brush {
-                        Button(action: onRepeat) { Label("执行辅种", systemImage: "square.stack.3d.up") }
-                    }
-                    Button(action: onToggle) { Label(item.enabled ? "停用" : "启用", systemImage: item.enabled ? "pause" : "play") }
-                    Button(action: onToggleBrush) { Label(item.brush ? "开启辅种" : "关闭辅种", systemImage: "bolt.horizontal") }
-                    Button(role: .destructive, action: onDelete) { Label("删除", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title3)
-                        .foregroundStyle(HarvestTheme.blue)
-                        .frame(width: 32, height: 32)
-                }
-                .accessibilityLabel("下载器操作")
-            }
-            CompactFlowLayout(spacing: 6) {
-                statusChip(
-                    item.enabled ? "已启用" : "已停用",
-                    icon: item.enabled ? "power" : "pause.circle.fill",
-                    color: item.enabled ? HarvestTheme.blue : .secondary
-                )
-                statusChip(
-                    item.brush ? "辅种关闭" : "辅种开启",
-                    icon: "square.stack.3d.up",
-                    color: item.brush ? .secondary : HarvestTheme.green
-                )
-                if item.main { statusChip("主下载器", icon: "star.fill", color: HarvestTheme.amber) }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            downloaderHeader
+            downloaderStatusLine
+                .padding(.top, 7)
+                .padding(.bottom, 9)
 
-            Divider()
-            downloaderConnectionPanel
+            Rectangle()
+                .fill(accentColor.opacity(0.42))
+                .frame(height: 2)
 
-            Divider()
-            HStack(spacing: 0) {
-                transferMetric(
-                    "已下载",
-                    value: formatBytes(item.downloadedSession),
-                    speed: formatSpeed(item.downloadSpeed),
-                    icon: "arrow.down",
-                    color: HarvestTheme.blue
-                )
-                Divider().frame(height: 48)
-                transferMetric(
-                    "已上传",
-                    value: formatBytes(item.uploadedSession),
-                    speed: formatSpeed(item.uploadSpeed),
-                    icon: "arrow.up",
-                    color: HarvestTheme.green
-                )
+            Button(action: onOpenTorrents) {
+                HStack(spacing: 0) {
+                    transferMetric(
+                        "下载",
+                        value: formatBytes(item.downloadedSession),
+                        speed: formatSpeed(item.downloadSpeed),
+                        icon: "arrow.down",
+                        color: HarvestTheme.blue
+                    )
+                    Divider().frame(height: 62)
+                    transferMetric(
+                        "上传",
+                        value: formatBytes(item.uploadedSession),
+                        speed: formatSpeed(item.uploadSpeed),
+                        icon: "arrow.up",
+                        color: HarvestTheme.green
+                    )
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .padding(.vertical, 8)
+            .accessibilityLabel("打开\(item.name)种子列表")
 
             Divider()
             HStack(spacing: 0) {
                 smallMetric("活跃", value: activeCountText, icon: "bolt.fill", color: HarvestTheme.green)
-                Divider().frame(height: 34)
+                Divider().frame(height: 36)
                 smallMetric("总数", value: totalCountText, icon: "square.stack.3d.up", color: accentColor)
-                Divider().frame(height: 34)
+                Divider().frame(height: 36)
                 smallMetric(
-                    "剩余",
+                    "剩余空间",
                     value: item.freeSpace > 0 ? formatBytes(item.freeSpace) : "-",
                     icon: "internaldrive.fill",
                     color: HarvestTheme.amber
                 )
             }
+            .padding(.vertical, 8)
+
             if item.uploadLimit > 0 || item.downloadLimit > 0 || item.alternativeSpeedEnabled {
+                Divider()
                 HStack(spacing: 8) {
                     Image(systemName: "gauge.with.dots.needle.33percent")
                         .font(.caption.weight(.semibold))
@@ -2929,72 +2837,81 @@ struct DownloaderCard: View {
                         }
                     }
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(HarvestTheme.amber.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .stroke(HarvestTheme.amber.opacity(0.16), lineWidth: 0.8)
-                }
+                .padding(.top, 8)
             }
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .harvestGlassSurface(cornerRadius: HarvestTheme.cardCornerRadius)
         .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
-        .onTapGesture(count: 2, perform: onOpenTorrents)
         .accessibilityAction(named: Text("打开种子列表")) { onOpenTorrents() }
     }
 
-    private var downloaderConnectionPanel: some View {
-        VStack(spacing: 0) {
-            downloaderInfoRow(
-                icon: "link",
-                label: downloaderTypeName,
-                value: displayAddress.isEmpty ? "-" : displayAddress,
-                color: accentColor,
-                drawsDivider: true
-            )
-            downloaderInfoRow(
-                icon: "folder.fill",
-                label: "种子路径",
-                value: item.torrentPath.isEmpty ? "-" : item.torrentPath,
-                color: .secondary,
-                drawsDivider: false
-            )
-        }
-        .padding(.horizontal, 2)
-    }
-
-    private func downloaderInfoRow(
-        icon: String,
-        label: String,
-        value: String,
-        color: Color,
-        drawsDivider: Bool
-    ) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(color)
-                    .frame(width: 20)
-                Text(label)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 70, alignment: .leading)
-                Text(value)
-                    .font(.caption.monospaced())
+    private var downloaderHeader: some View {
+        HStack(alignment: .center, spacing: 10) {
+            SymbolBadge(icon: downloaderIcon, color: accentColor, size: 42)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name)
+                    .font(.headline)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 5) {
+                    Text(downloaderTypeName)
+                    if !item.version.isEmpty { Text(item.version).monospacedDigit() }
+                    Circle()
+                        .fill(connected ? HarvestTheme.green : HarvestTheme.coral)
+                        .frame(width: 6, height: 6)
+                    Text(connected ? "在线" : "离线")
+                        .foregroundStyle(connected ? HarvestTheme.green : HarvestTheme.coral)
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 5)
-            if drawsDivider { Divider().padding(.leading, 28) }
+            .layoutPriority(1)
+            Spacer(minLength: 4)
+            Menu {
+                Button(action: onOpenTorrents) { Label("种子列表", systemImage: "list.bullet.rectangle") }
+                Button(action: onAddTorrent) { Label("添加种子", systemImage: "link.badge.plus") }
+                Divider()
+                Button(action: onEdit) { Label("编辑", systemImage: "pencil") }
+                Button(action: onSettings) { Label("参数设置", systemImage: "slider.horizontal.3") }
+                Button(action: onSpeedSettings) { Label("限速设置", systemImage: "gauge.with.dots.needle.67percent") }
+                Button(action: onConnection) { Label("连接检查", systemImage: "network") }
+                if !isTransmission {
+                    Button(action: onCategories) { Label("分类管理", systemImage: "tag.square") }
+                    Button(action: onTags) { Label("标签管理", systemImage: "tag") }
+                }
+                if !item.brush {
+                    Button(action: onRepeat) { Label("执行辅种", systemImage: "square.stack.3d.up") }
+                }
+                Button(action: onToggle) { Label(item.enabled ? "停用" : "启用", systemImage: item.enabled ? "pause" : "play") }
+                Button(action: onToggleBrush) { Label(item.brush ? "开启辅种" : "关闭辅种", systemImage: "bolt.horizontal") }
+                Button(role: .destructive, action: onDelete) { Label("删除", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundStyle(accentColor)
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityLabel("下载器操作")
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label) \(value)")
+    }
+
+    private var downloaderStatusLine: some View {
+        CompactFlowLayout(spacing: 6) {
+            statusChip(
+                item.enabled ? "已启用" : "已停用",
+                icon: item.enabled ? "power" : "pause.circle.fill",
+                color: item.enabled ? accentColor : .secondary
+            )
+            statusChip(
+                item.brush ? "辅种关闭" : "辅种开启",
+                icon: "square.stack.3d.up",
+                color: item.brush ? .secondary : HarvestTheme.green
+            )
+            if item.main { statusChip("主下载器", icon: "star.fill", color: HarvestTheme.amber) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func statusChip(_ label: String, icon: String, color: Color) -> some View {
@@ -3009,31 +2926,31 @@ struct DownloaderCard: View {
     }
 
     private func transferMetric(_ label: String, value: String, speed: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(color)
-                    .frame(width: 22, height: 22)
-                    .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 Text(label)
-                    .font(.caption2.weight(.medium))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Text(speed)
+                Text(value)
                     .font(.caption2.weight(.medium).monospacedDigit())
-                    .foregroundStyle(color)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
-            Text(value)
-                .font(.subheadline.weight(.bold).monospacedDigit())
+            Text(speed)
+                .font(.title3.weight(.bold).monospacedDigit())
+                .foregroundStyle(color)
                 .lineLimit(1)
-                .minimumScaleFactor(0.65)
+                .minimumScaleFactor(0.58)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 8)
     }
 
     private func smallMetric(_ label: String, value: String, icon: String, color: Color) -> some View {
@@ -3053,8 +2970,7 @@ struct DownloaderCard: View {
                 .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
     }
 
     private var activeCountText: String {
@@ -3065,10 +2981,6 @@ struct DownloaderCard: View {
     private var totalCountText: String {
         if item.totalTorrentCount > 0 { return "\(item.totalTorrentCount)" }
         return isResolvingCounts ? "…" : "0"
-    }
-
-    private var displayAddress: String {
-        downloaderDisplayAddress(item)
     }
 
     private func limitValue(_ icon: String, value: String, color: Color) -> some View {

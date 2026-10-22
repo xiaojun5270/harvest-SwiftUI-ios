@@ -2302,156 +2302,6 @@ private struct TelegramAccountSheet: View {
     }
 }
 
-struct TelegramScheduleTaskRow: View {
-    let bot: TelegramCheckinBot
-    let isRunning: Bool
-    let onRun: () -> Void
-
-    var body: some View {
-        HStack(spacing: 11) {
-            FlowingSymbolBadge(
-                icon: "paperplane.fill",
-                color: bot.scheduleEnabled && bot.isEnabled ? HarvestTheme.blue : Color.secondary,
-                size: 38,
-                showsProgress: isRunning
-            )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(bot.displayName)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text("TG Bot 签到")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Label(bot.scheduleText, systemImage: "calendar.badge.clock")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 5)
-            VStack(alignment: .trailing, spacing: 7) {
-                Text(bot.scheduleEnabled && bot.isEnabled ? "已启用" : "已停用")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(bot.scheduleEnabled && bot.isEnabled ? HarvestTheme.green : Color.secondary)
-                Button(action: onRun) {
-                    if isRunning { ProgressView().controlSize(.small) }
-                    else { Image(systemName: "play.fill") }
-                }
-                .buttonStyle(.borderless)
-                .disabled(isRunning || !bot.isEnabled)
-                .accessibilityLabel("立即执行 \(bot.displayName) 签到")
-            }
-        }
-        .padding(.vertical, 5)
-    }
-}
-
-struct TelegramScheduleEditorSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var draft: TelegramCheckinBot
-    @State private var validationMessage: String?
-    let onSave: (TelegramCheckinBot) -> Void
-
-    private let weekdayOptions = [(2, "一"), (3, "二"), (4, "三"), (5, "四"), (6, "五"), (7, "六"), (1, "日")]
-
-    init(bot: TelegramCheckinBot, onSave: @escaping (TelegramCheckinBot) -> Void) {
-        _draft = State(initialValue: bot)
-        self.onSave = onSave
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("任务") {
-                    LabeledContent("Bot", value: draft.displayName)
-                    LabeledContent("账号", value: "@\(draft.normalizedUsername)")
-                    Toggle("启用 Bot", isOn: $draft.isEnabled)
-                    Toggle("启用定时签到", isOn: $draft.scheduleEnabled)
-                }
-
-                Section {
-                    DatePicker("执行时间", selection: scheduleDate, displayedComponents: .hourAndMinute)
-                    HStack(spacing: 6) {
-                        ForEach(weekdayOptions, id: \.0) { value, label in
-                            Button {
-                                toggleWeekday(value)
-                            } label: {
-                                Text(label)
-                                    .font(.caption.weight(.semibold))
-                                    .frame(maxWidth: .infinity, minHeight: 30)
-                                    .foregroundStyle(draft.weekdays.contains(value) ? Color.white : Color.primary)
-                                    .background(
-                                        draft.weekdays.contains(value) ? HarvestTheme.blue : Color.secondary.opacity(0.10),
-                                        in: Circle()
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                } header: {
-                    Text("执行计划")
-                } footer: {
-                    Text("TG 定时签到由 App 在前台检查执行；iOS 挂起或终止 App 后不能保证准时运行。")
-                }
-
-                Section("执行内容") {
-                    ForEach(Array(draft.commands.enumerated()), id: \.offset) { index, command in
-                        LabeledContent("命令 \(index + 1)", value: command)
-                    }
-                    LabeledContent("超时", value: "\(draft.timeoutSeconds) 秒")
-                    LabeledContent("重试", value: "\(draft.retryCount) 次")
-                }
-
-                if let validationMessage {
-                    Section {
-                        Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(HarvestTheme.coral)
-                    }
-                }
-            }
-            .navigationTitle("TG 签到任务")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { save() }
-                }
-            }
-        }
-    }
-
-    private var scheduleDate: Binding<Foundation.Date> {
-        Binding {
-            let hour = draft.scheduleMinute / 60
-            let minute = draft.scheduleMinute % 60
-            return Calendar.current.date(
-                bySettingHour: hour,
-                minute: minute,
-                second: 0,
-                of: Foundation.Date()
-            ) ?? Foundation.Date()
-        } set: { date in
-            let values = Calendar.current.dateComponents([.hour, .minute], from: date)
-            draft.scheduleMinute = (values.hour ?? 0) * 60 + (values.minute ?? 0)
-        }
-    }
-
-    private func toggleWeekday(_ value: Int) {
-        if draft.weekdays.contains(value) { draft.weekdays.removeAll { $0 == value } }
-        else { draft.weekdays.append(value) }
-    }
-
-    private func save() {
-        guard !draft.scheduleEnabled || !draft.weekdays.isEmpty else {
-            validationMessage = "启用定时签到时至少选择一天"
-            return
-        }
-        onSave(draft)
-        dismiss()
-    }
-}
-
 private struct TelegramBotEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: TelegramCheckinBot
@@ -2462,6 +2312,7 @@ private struct TelegramBotEditorSheet: View {
     @State private var panelButtonKeywords: String
     @State private var validationMessage: String?
     let onSave: (TelegramCheckinBot) -> Void
+    private let weekdayOptions = [(2, "一"), (3, "二"), (4, "三"), (5, "四"), (6, "五"), (7, "六"), (1, "日")]
 
     init(bot: TelegramCheckinBot, onSave: @escaping (TelegramCheckinBot) -> Void) {
         _draft = State(initialValue: bot)
@@ -2537,6 +2388,34 @@ private struct TelegramBotEditorSheet: View {
                     Stepper("超时重试：\(draft.retryCount) 次", value: $draft.retryCount, in: 0...3)
                 }
 
+                Section {
+                    Toggle("启用定时签到", isOn: $draft.scheduleEnabled)
+                    if draft.scheduleEnabled {
+                        DatePicker("执行时间", selection: scheduleDate, displayedComponents: .hourAndMinute)
+                        HStack(spacing: 6) {
+                            ForEach(weekdayOptions, id: \.0) { value, label in
+                                Button {
+                                    toggleWeekday(value)
+                                } label: {
+                                    Text(label)
+                                        .font(.caption.weight(.semibold))
+                                        .frame(maxWidth: .infinity, minHeight: 30)
+                                        .foregroundStyle(draft.weekdays.contains(value) ? Color.white : Color.primary)
+                                        .background(
+                                            draft.weekdays.contains(value) ? HarvestTheme.blue : Color.secondary.opacity(0.10),
+                                            in: Circle()
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("定时签到")
+                } footer: {
+                    Text("由 App 在前台检查执行；iOS 挂起或终止 App 后不能保证准时运行。")
+                }
+
                 if let validationMessage {
                     Section {
                         Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
@@ -2567,6 +2446,27 @@ private struct TelegramBotEditorSheet: View {
         }
     }
 
+    private var scheduleDate: Binding<Foundation.Date> {
+        Binding {
+            let hour = draft.scheduleMinute / 60
+            let minute = draft.scheduleMinute % 60
+            return Calendar.current.date(
+                bySettingHour: hour,
+                minute: minute,
+                second: 0,
+                of: Foundation.Date()
+            ) ?? Foundation.Date()
+        } set: { date in
+            let values = Calendar.current.dateComponents([.hour, .minute], from: date)
+            draft.scheduleMinute = (values.hour ?? 0) * 60 + (values.minute ?? 0)
+        }
+    }
+
+    private func toggleWeekday(_ value: Int) {
+        if draft.weekdays.contains(value) { draft.weekdays.removeAll { $0 == value } }
+        else { draft.weekdays.append(value) }
+    }
+
     private func save() {
         let username = draft.normalizedUsername
         guard !username.isEmpty else {
@@ -2580,6 +2480,10 @@ private struct TelegramBotEditorSheet: View {
             validationMessage = "至少输入一条签到命令"
             return
         }
+        guard !draft.scheduleEnabled || !draft.weekdays.isEmpty else {
+            validationMessage = "启用定时签到时至少选择一天"
+            return
+        }
         draft.username = username
         draft.command = normalizedCommands[0]
         draft.additionalCommands = normalizedCommands.count > 1 ? Array(normalizedCommands.dropFirst()) : nil
@@ -2587,6 +2491,7 @@ private struct TelegramBotEditorSheet: View {
         draft.failureKeywords = keywordList(failureKeywords)
         draft.automaticallyPressPanelButton = automaticallyPressPanelButton
         draft.panelButtonKeywords = keywordList(panelButtonKeywords)
+        if draft.scheduleEnabled { draft.isEnabled = true }
         onSave(draft)
         dismiss()
     }
