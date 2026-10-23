@@ -406,8 +406,14 @@ struct TasksView: View {
             }
         }
         .task {
-            if model.isLoading, appState.beginInitialPageLoad("tasks") {
-                await model.load(appState)
+            // The app-session gate prevents duplicate loads for the same model,
+            // but a newly created TasksViewModel still needs its own bootstrap.
+            // Otherwise a completed gate can leave a fresh view permanently on
+            // the skeleton screen.
+            guard model.isLoading, model.tasks.isEmpty, model.results.isEmpty else { return }
+            let ownsInitialLoad = appState.beginInitialPageLoad("tasks")
+            await model.load(appState)
+            if ownsInitialLoad {
                 appState.finishInitialPageLoad("tasks", success: !Task.isCancelled)
             }
         }

@@ -93,14 +93,14 @@ struct DownloaderItem: Identifiable {
         main = json.bool("main", "is_main", "default") ?? false
         uploadSpeed = status.double("uploadSpeed", "upload_speed", "up_info_speed") ?? 0
         downloadSpeed = status.double("downloadSpeed", "download_speed", "dl_info_speed") ?? 0
-        activeTorrentCount = downloaderMetricInt(status, keys: downloaderActiveCountKeys)
-            ?? downloaderMetricInt(json, keys: downloaderActiveCountKeys)
+        activeTorrentCount = downloaderActiveMetricInt(status, category: categoryValue)
+            ?? downloaderActiveMetricInt(json, category: categoryValue)
             ?? 0
-        pausedTorrentCount = downloaderMetricInt(status, keys: downloaderPausedCountKeys)
-            ?? downloaderMetricInt(json, keys: downloaderPausedCountKeys)
+        pausedTorrentCount = downloaderPausedMetricInt(status, category: categoryValue)
+            ?? downloaderPausedMetricInt(json, category: categoryValue)
             ?? 0
-        totalTorrentCount = downloaderMetricInt(status, keys: downloaderTotalCountKeys)
-            ?? downloaderMetricInt(json, keys: downloaderTotalCountKeys)
+        totalTorrentCount = downloaderTotalMetricInt(status, category: categoryValue)
+            ?? downloaderTotalMetricInt(json, category: categoryValue)
             ?? 0
         freeSpace = downloaderFreeSpace(status) ?? downloaderFreeSpace(preferences) ?? 0
         if downloaderIsTransmission(categoryValue) {
@@ -178,19 +178,28 @@ private func downloaderDisplayAddress(_ downloader: DownloaderItem) -> String {
 }
 
 private let downloaderActiveCountKeys = [
-    "activeTorrentCount", "active_torrent_count", "activeTorrents", "active_torrents",
-    "active_count", "activeCount"
+    "activeTorrentCount"
 ]
 
 private let downloaderPausedCountKeys = [
-    "pausedTorrentCount", "paused_torrent_count", "pausedTorrents", "paused_torrents",
-    "paused_count", "pausedCount", "stoppedTorrentCount", "stopped_torrent_count"
+    "pausedTorrentCount"
 ]
 
 private let downloaderTotalCountKeys = [
-    "torrentCount", "torrent_count", "totalTorrentCount", "total_torrent_count", "totalTorrents",
-    "total_torrents", "torrents_count", "torrentTotal", "torrent_total", "total_count"
+    "torrentCount"
 ]
+
+private func downloaderActiveMetricInt(_ dictionary: [String: Any], category _: String) -> Int? {
+    downloaderMetricInt(dictionary, keys: downloaderActiveCountKeys)
+}
+
+private func downloaderPausedMetricInt(_ dictionary: [String: Any], category _: String) -> Int? {
+    downloaderMetricInt(dictionary, keys: downloaderPausedCountKeys)
+}
+
+private func downloaderTotalMetricInt(_ dictionary: [String: Any], category _: String) -> Int? {
+    downloaderMetricInt(dictionary, keys: downloaderTotalCountKeys)
+}
 
 private func downloaderMetricInt(
     _ dictionary: [String: Any],
@@ -1688,8 +1697,8 @@ final class DownloadsViewModel: ObservableObject {
                 guard downloader.enabled else { return false }
                 if force { return true }
                 guard let live = model.liveStatus(for: downloader) else { return true }
-                return downloaderMetricInt(live, keys: downloaderTotalCountKeys) == nil
-                    || downloaderMetricInt(live, keys: downloaderActiveCountKeys) == nil
+                return downloaderTotalMetricInt(live, category: downloader.category) == nil
+                    || downloaderActiveMetricInt(live, category: downloader.category) == nil
             }
             guard !candidates.isEmpty else {
                 model.lastCountRefreshAt = Date()
@@ -1736,9 +1745,10 @@ final class DownloadsViewModel: ObservableObject {
     ) -> Bool {
         guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }),
               let status = reportedDownloaderStatus(raw) else { return false }
-        let active = downloaderMetricInt(status, keys: downloaderActiveCountKeys)
-        let paused = downloaderMetricInt(status, keys: downloaderPausedCountKeys)
-        let total = downloaderMetricInt(status, keys: downloaderTotalCountKeys)
+        let category = downloaders[index].category
+        let active = downloaderActiveMetricInt(status, category: category)
+        let paused = downloaderPausedMetricInt(status, category: category)
+        let total = downloaderTotalMetricInt(status, category: category)
         guard active != nil || paused != nil || total != nil else { return false }
         let current = downloaders[index]
         var values: [String: Any] = [:]
@@ -1913,16 +1923,16 @@ final class DownloadsViewModel: ObservableObject {
             var merged = downloader.raw
             merged["status"] = live
             var preservedCounts: [String: Any] = [:]
-            if downloaderMetricInt(live, keys: downloaderActiveCountKeys) == nil,
-               downloaderMetricInt(downloader.raw, keys: downloaderActiveCountKeys) != nil {
+            if downloaderActiveMetricInt(live, category: downloader.category) == nil,
+               downloaderActiveMetricInt(downloader.raw, category: downloader.category) != nil {
                 preservedCounts["activeTorrentCount"] = downloader.activeTorrentCount
             }
-            if downloaderMetricInt(live, keys: downloaderPausedCountKeys) == nil,
-               downloaderMetricInt(downloader.raw, keys: downloaderPausedCountKeys) != nil {
+            if downloaderPausedMetricInt(live, category: downloader.category) == nil,
+               downloaderPausedMetricInt(downloader.raw, category: downloader.category) != nil {
                 preservedCounts["pausedTorrentCount"] = downloader.pausedTorrentCount
             }
-            if downloaderMetricInt(live, keys: downloaderTotalCountKeys) == nil,
-               downloaderMetricInt(downloader.raw, keys: downloaderTotalCountKeys) != nil {
+            if downloaderTotalMetricInt(live, category: downloader.category) == nil,
+               downloaderTotalMetricInt(downloader.raw, category: downloader.category) != nil {
                 preservedCounts["torrentCount"] = downloader.totalTorrentCount
             }
             if !preservedCounts.isEmpty {
