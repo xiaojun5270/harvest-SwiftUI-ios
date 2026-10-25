@@ -1574,6 +1574,7 @@ final class DownloadsViewModel: ObservableObject {
         if refreshEnabled && !refreshPaused && !isWatching {
             beginWatching(appState)
         }
+        scheduleCountRefresh(appState, force: true)
     }
 
     func stopWatching() {
@@ -1693,13 +1694,10 @@ final class DownloadsViewModel: ObservableObject {
                 catch { return }
             }
             guard let model = reference.value, !Task.isCancelled else { return }
-            let candidates = model.downloaders.filter { downloader in
-                guard downloader.enabled else { return false }
-                if force { return true }
-                guard let live = model.liveStatus(for: downloader) else { return true }
-                return downloaderTotalMetricInt(live, category: downloader.category) == nil
-                    || downloaderActiveMetricInt(live, category: downloader.category) == nil
-            }
+            // The speed WebSocket can keep emitting an old count snapshot even
+            // while speed/session metrics change. Presence is not freshness, so
+            // every enabled downloader must be reconciled with main.status.
+            let candidates = model.downloaders.filter(\.enabled)
             guard !candidates.isEmpty else {
                 model.lastCountRefreshAt = Date()
                 model.countRefreshTask = nil
@@ -1759,6 +1757,10 @@ final class DownloadsViewModel: ObservableObject {
         guard next.activeTorrentCount != current.activeTorrentCount
                 || next.pausedTorrentCount != current.pausedTorrentCount
                 || next.totalTorrentCount != current.totalTorrentCount else { return true }
+        recordAppLog(
+            .debug,
+            "下载器 \(downloaderID) 计数更新：活跃 \(current.activeTorrentCount)→\(next.activeTorrentCount)，总数 \(current.totalTorrentCount)→\(next.totalTorrentCount)"
+        )
         downloaders[index] = next
         usingCachedData = false
         cachedAt = nil

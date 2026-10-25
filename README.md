@@ -150,6 +150,8 @@ xcodebuild \
 
 - 修复 qB 下载器实时状态匹配失败导致活跃数、总数长期停留在首次值：支持下载器 ID、
   `name-id-category` 和 `wsKey`，实时帧先解包 `data/info/status/server_state`。
+- 修复速度 WebSocket 持续返回旧计数时，客户端因“字段存在”而跳过校准的问题；所有启用
+  下载器每 60 秒从 `main.status` 重新同步，手动刷新和重新进入下载页立即强制同步。
 - qB 和 Transmission 统一只读取 `activeTorrentCount`、`pausedTorrentCount`、`torrentCount`，
   移除容易串值的 `active_count`、`active_torrents` 等别名。
 - 修复任务中心重新打开时空白或长期停留骨架屏，新建任务模型会独立完成缓存和接口初始化。
