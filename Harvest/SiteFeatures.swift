@@ -4093,38 +4093,25 @@ private struct SiteInlineStatus: View {
 }
 
 private struct SiteHeaderCompactMetric: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.harvestFlowEffectsPaused) private var flowEffectsPaused
     let icon: String
     let label: String
     let value: String
     let color: Color
-    let breathes: Bool
 
-    init(icon: String, label: String, value: String, color: Color, breathes: Bool = false) {
+    init(icon: String, label: String, value: String, color: Color, breathes _: Bool = false) {
         self.icon = icon
         self.label = label
         self.value = value
         self.color = color
-        self.breathes = breathes
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: 2) {
-            if breathes {
-                HardwareBreathingSymbolBadge(
-                    icon: icon,
-                    color: color,
-                    paused: reduceMotion || flowEffectsPaused
-                )
-                .frame(width: 14, height: 14)
-            } else {
-                Image(systemName: icon)
-                    .font(.system(size: 6.5, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 14, height: 14, alignment: .center)
-                    .background(color, in: RoundedRectangle(cornerRadius: 3.5, style: .continuous))
-            }
+            Image(systemName: icon)
+                .font(.system(size: 6.5, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 14, height: 14, alignment: .center)
+                .background(color, in: RoundedRectangle(cornerRadius: 3.5, style: .continuous))
             Text(value)
                 .font(.system(size: 8, weight: .bold).monospacedDigit())
                 .lineLimit(1)

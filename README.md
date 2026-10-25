@@ -19,6 +19,13 @@ the same bundle identifier side by side.
 
 ### 2026.1021.01 (301) - 2026-10-21
 
+- 修复 Dock 切换卡顿：移除主壳在每次切换时将所有 Tab 的动效环境先置空、再延迟恢复的
+  两次全树重算和 180ms 任务。当前动效已统一静态呈现，Tab 不再因无效的暂停状态传播而
+  重建隐藏页面；导航栏、搜索回跳和各页面功能保持不变。
+- 站点卡片提醒图标改用纯 SwiftUI 静态图标，移除已停用动画仍残留的 `UIViewRepresentable`
+  包装，减少长列表隐藏页面在 Dock 切换时的布局和桥接开销。
+- 加载骨架和仪表盘进度条移除已停用的 shimmer 原生包装，改为静态描边与填充，避免
+  Dock 切换时创建无效的 Core Animation/UIView 层。
 - 修复 qB/Transmission 下载器活跃数和总数映射不准：两种客户端统一按 Flutter 同步的
   `activeTorrentCount`、`pausedTorrentCount`、`torrentCount` 精确字段解析，移除可能把
   `active_count`、`active_torrents` 等其他字段误当计数的兼容别名。

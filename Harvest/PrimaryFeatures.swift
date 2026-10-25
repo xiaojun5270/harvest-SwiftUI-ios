@@ -3237,7 +3237,6 @@ private struct DistributionView: View {
 
 private struct DashboardMetricBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.harvestFlowEffectsPaused) private var flowEffectsPaused
 
     let value: Double
     let maximum: Double
@@ -3275,8 +3274,6 @@ private struct DashboardMetricBar: View {
                         )
                         .frame(width: min(max(filledWidth * 0.24, 10), 30))
                         .frame(maxWidth: .infinity, alignment: .trailing)
-                    } else if emphasizesLeadingEdge, filledWidth > 2 {
-                        HardwareProgressShimmer(color: color, paused: flowEffectsPaused)
                     }
                 }
                     .frame(width: filledWidth)

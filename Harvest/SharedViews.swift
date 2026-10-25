@@ -1916,7 +1916,6 @@ struct MainShellView: View {
     @State private var handledNoticePresentation = 0
     @State private var selectedTab = 2
     @State private var lastNonSearchTab = 2
-    @State private var effectsActiveTab: Int?
     @State private var didRestoreInitialTab = false
 
     private var showsNewsTab: Bool {
@@ -2029,12 +2028,6 @@ struct MainShellView: View {
             guard !Task.isCancelled, !showingSettings, !showingNotices else { return }
             showingAppUpdate = true
         }
-        .task(id: selectedTab) {
-            do { try await Task.sleep(for: .milliseconds(180)) }
-            catch { return }
-            guard !Task.isCancelled else { return }
-            effectsActiveTab = selectedTab
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 appState.requestAutomaticRefresh()
@@ -2063,7 +2056,6 @@ struct MainShellView: View {
             selectedTab = 5
         }
         .onChange(of: selectedTab) { oldValue, newValue in
-            effectsActiveTab = nil
             if newValue == 5, oldValue != 5 {
                 lastNonSearchTab = validContentTab(oldValue)
             } else if newValue != 5 {
@@ -2087,23 +2079,22 @@ struct MainShellView: View {
         TabView(selection: $selectedTab) {
             if showsNewsTab {
                 Tab("资讯", systemImage: "newspaper.fill", value: 0) {
-                    NewsView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 0)
+                    NewsView()
                 }
             }
             if showsAdminTabs {
                 Tab("站点", systemImage: "globe.asia.australia.fill", value: 1) {
-                    SitesView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 1)
+                    SitesView()
                 }
                 Tab("仪表盘", systemImage: "chart.bar.xaxis", value: 2) {
-                    DashboardView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 2)
+                    DashboardView()
                 }
             }
             Tab("下载", systemImage: "arrow.down.circle.fill", value: 3) {
-                DownloadsView().environment(\.harvestFlowEffectsPaused, effectsActiveTab != 3)
+                DownloadsView()
             }
             Tab("搜索", systemImage: "magnifyingglass", value: 5, role: .search) {
                 SearchView { selectedTab = lastNonSearchTab }
-                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 5)
             }
         }
         .tint(appState.accent.color)
@@ -2113,26 +2104,21 @@ struct MainShellView: View {
         TabView(selection: $selectedTab) {
             if showsNewsTab {
                 NewsView()
-                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 0)
                     .tabItem { Label("资讯", systemImage: "newspaper.fill") }
                     .tag(0)
             }
             if showsAdminTabs {
                 SitesView()
-                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 1)
                     .tabItem { Label("站点", systemImage: "globe.asia.australia.fill") }
                     .tag(1)
                 DashboardView()
-                    .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 2)
                     .tabItem { Label("仪表盘", systemImage: "chart.bar.xaxis") }
                     .tag(2)
             }
             DownloadsView()
-                .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 3)
                 .tabItem { Label("下载", systemImage: "arrow.down.circle.fill") }
                 .tag(3)
             SearchView { selectedTab = lastNonSearchTab }
-                .environment(\.harvestFlowEffectsPaused, effectsActiveTab != 5)
                 .tabItem { Label("搜索", systemImage: "magnifyingglass") }
                 .tag(5)
         }
