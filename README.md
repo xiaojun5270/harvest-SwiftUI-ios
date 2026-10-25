@@ -19,6 +19,9 @@ the same bundle identifier side by side.
 
 ### 2026.1021.01 (301) - 2026-10-21
 
+- 修复 qB 下载器实时状态匹配失败导致活跃数、总数长期停留在首次值：兼容 Flutter 使用的
+  下载器 `id` 与 `name-id-category` WebSocket key，并支持后端返回的 `wsKey`；实时帧先
+  解包 `data/info/status/server_state` 后直接覆盖精确计数，避免卡片继续显示旧缓存。
 - 修复 Dock 切换卡顿：移除主壳在每次切换时将所有 Tab 的动效环境先置空、再延迟恢复的
   两次全树重算和 180ms 任务。当前动效已统一静态呈现，Tab 不再因无效的暂停状态传播而
   重建隐藏页面；导航栏、搜索回跳和各页面功能保持不变。

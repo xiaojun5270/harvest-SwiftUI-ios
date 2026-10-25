@@ -1921,23 +1921,24 @@ final class DownloadsViewModel: ObservableObject {
             guard let live = liveStatus(for: downloader) else { continue }
             matchedLiveStatus = true
             var merged = downloader.raw
-            merged["status"] = live
             var preservedCounts: [String: Any] = [:]
-            if downloaderActiveMetricInt(live, category: downloader.category) == nil,
-               downloaderActiveMetricInt(downloader.raw, category: downloader.category) != nil {
+            let liveStatus = reportedDownloaderStatus(live) ?? live
+            if let active = downloaderActiveMetricInt(liveStatus, category: downloader.category) {
+                preservedCounts["activeTorrentCount"] = max(0, active)
+            } else {
                 preservedCounts["activeTorrentCount"] = downloader.activeTorrentCount
             }
-            if downloaderPausedMetricInt(live, category: downloader.category) == nil,
-               downloaderPausedMetricInt(downloader.raw, category: downloader.category) != nil {
+            if let paused = downloaderPausedMetricInt(liveStatus, category: downloader.category) {
+                preservedCounts["pausedTorrentCount"] = max(0, paused)
+            } else {
                 preservedCounts["pausedTorrentCount"] = downloader.pausedTorrentCount
             }
-            if downloaderTotalMetricInt(live, category: downloader.category) == nil,
-               downloaderTotalMetricInt(downloader.raw, category: downloader.category) != nil {
+            if let total = downloaderTotalMetricInt(liveStatus, category: downloader.category) {
+                preservedCounts["torrentCount"] = max(0, total)
+            } else {
                 preservedCounts["torrentCount"] = downloader.totalTorrentCount
             }
-            if !preservedCounts.isEmpty {
-                merged = mergingDownloaderStatus(preservedCounts, into: merged)
-            }
+            merged = mergingDownloaderStatus(preservedCounts, into: merged)
             let next = DownloaderItem(merged)
             guard downloaderLiveSignature(next) != downloaderLiveSignature(downloader) else { continue }
             updated[index] = next
@@ -1959,14 +1960,21 @@ final class DownloadsViewModel: ObservableObject {
         var keys = categoryAliases.map {
             normalizedDownloaderLiveKey("\(downloader.name)-\(downloader.id)-\($0)")
         }
+        if let explicitKey = downloader.raw.string("wsKey", "ws_key", "websocketKey", "websocket_key") {
+            keys.insert(normalizedDownloaderLiveKey(explicitKey), at: 0)
+        }
         keys.append(String(downloader.id))
         for key in keys {
             if let value = latestDownloaderSpeedValues[key] { return value }
         }
         let idSegment = "-\(downloader.id)-"
-        return latestDownloaderSpeedValues.first { key, _ in
+        if let matched = latestDownloaderSpeedValues.first(where: { key, _ in
             key.contains(idSegment)
-        }?.value
+                || key.split(separator: "-").contains { String($0) == String(downloader.id) }
+        }) {
+            return matched.value
+        }
+        return nil
     }
 
     private func normalizedDownloaderLiveKey(_ value: String) -> String {
