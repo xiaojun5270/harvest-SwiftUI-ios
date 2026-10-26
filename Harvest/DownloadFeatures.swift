@@ -186,7 +186,8 @@ private let downloaderPausedCountKeys = [
 ]
 
 private let downloaderTotalCountKeys = [
-    "torrentCount"
+    "torrentCount",
+    "torrent_count"
 ]
 
 private func downloaderActiveMetricInt(_ dictionary: [String: Any], category _: String) -> Int? {
@@ -1684,7 +1685,7 @@ final class DownloadsViewModel: ObservableObject {
         guard countRefreshTask == nil else { return }
         if !force,
            let lastCountRefreshAt,
-           Date().timeIntervalSince(lastCountRefreshAt) < 60 {
+           Date().timeIntervalSince(lastCountRefreshAt) < TimeInterval(max(5, refreshInterval)) {
             return
         }
         let reference = WeakReference(self)
@@ -1769,19 +1770,28 @@ final class DownloadsViewModel: ObservableObject {
     }
 
     private func reportedDownloaderStatus(_ raw: Any) -> [String: Any]? {
-        guard let root = jsonPayloadDictionary(raw) ?? jsonDictionary(raw) else { return nil }
-        if let status = root.dict("status", "server_state", "serverState") { return status }
-        if downloaderMetricInt(root, keys: downloaderTotalCountKeys) != nil
-            || downloaderMetricInt(root, keys: downloaderActiveCountKeys) != nil {
-            return root
+        guard let root = jsonDictionary(raw) else { return nil }
+        return downloaderMetricContainer(root)
+    }
+
+    private func downloaderMetricContainer(
+        _ dictionary: [String: Any],
+        depth: Int = 0
+    ) -> [String: Any]? {
+        guard depth < 8 else { return nil }
+        if downloaderTotalMetricInt(dictionary, category: "") != nil
+            || downloaderActiveMetricInt(dictionary, category: "") != nil
+            || downloaderPausedMetricInt(dictionary, category: "") != nil {
+            return dictionary
         }
-        for key in ["data", "result", "info"] {
-            guard let nested = root.dict(key) else { continue }
-            if let status = nested.dict("status", "server_state", "serverState") { return status }
-            if downloaderMetricInt(nested, keys: downloaderTotalCountKeys) != nil
-                || downloaderMetricInt(nested, keys: downloaderActiveCountKeys) != nil {
-                return nested
-            }
+        let preferredKeys = [
+            "data", "result", "info", "status", "server_state", "serverState",
+            "current-stats", "currentStats"
+        ]
+        for key in preferredKeys {
+            guard let nested = dictionary.dict(key),
+                  let result = downloaderMetricContainer(nested, depth: depth + 1) else { continue }
+            return result
         }
         return nil
     }
@@ -1908,7 +1918,10 @@ final class DownloadsViewModel: ObservableObject {
             }
         }
         guard !liveByKey.isEmpty else { return }
-        latestDownloaderSpeedValues = liveByKey
+        // A frame may contain only the downloaders that changed. Keep the
+        // previous entries, matching the Flutter provider's state merge, so a
+        // partial frame cannot make another card appear frozen or offline.
+        latestDownloaderSpeedValues.merge(liveByKey) { _, incoming in incoming }
         applyLatestDownloaderSpeedValues(appState: appState)
         scheduleCountRefresh(appState)
     }
@@ -1923,23 +1936,16 @@ final class DownloadsViewModel: ObservableObject {
             guard let live = liveStatus(for: downloader) else { continue }
             matchedLiveStatus = true
             var merged = downloader.raw
-            var preservedCounts: [String: Any] = [:]
-            let liveStatus = reportedDownloaderStatus(live) ?? live
-            if let active = downloaderActiveMetricInt(liveStatus, category: downloader.category) {
-                preservedCounts["activeTorrentCount"] = max(0, active)
-            } else {
-                preservedCounts["activeTorrentCount"] = downloader.activeTorrentCount
-            }
-            if let paused = downloaderPausedMetricInt(liveStatus, category: downloader.category) {
-                preservedCounts["pausedTorrentCount"] = max(0, paused)
-            } else {
-                preservedCounts["pausedTorrentCount"] = downloader.pausedTorrentCount
-            }
-            if let total = downloaderTotalMetricInt(liveStatus, category: downloader.category) {
-                preservedCounts["torrentCount"] = max(0, total)
-            } else {
-                preservedCounts["torrentCount"] = downloader.totalTorrentCount
-            }
+            // The WebSocket frame is the live source for speeds, session traffic,
+            // limits and connection state. Its count fields may be stale on the
+            // backend, so counts are always carried forward from the last HTTP
+            // reconciliation instead of being replaced by this frame.
+            merged["status"] = live
+            let preservedCounts: [String: Any] = [
+                "activeTorrentCount": downloader.activeTorrentCount,
+                "pausedTorrentCount": downloader.pausedTorrentCount,
+                "torrentCount": downloader.totalTorrentCount
+            ]
             merged = mergingDownloaderStatus(preservedCounts, into: merged)
             let next = DownloaderItem(merged)
             guard downloaderLiveSignature(next) != downloaderLiveSignature(downloader) else { continue }

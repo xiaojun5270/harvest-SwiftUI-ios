@@ -150,10 +150,15 @@ xcodebuild \
 
 - 修复 qB 下载器实时状态匹配失败导致活跃数、总数长期停留在首次值：支持下载器 ID、
   `name-id-category` 和 `wsKey`，实时帧先解包 `data/info/status/server_state`。
-- 修复速度 WebSocket 持续返回旧计数时，客户端因“字段存在”而跳过校准的问题；所有启用
-  下载器每 60 秒从 `main.status` 重新同步，手动刷新和重新进入下载页立即强制同步。
-- qB 和 Transmission 统一只读取 `activeTorrentCount`、`pausedTorrentCount`、`torrentCount`，
-  移除容易串值的 `active_count`、`active_torrents` 等别名。
+- 修复速度 WebSocket 持续返回旧计数时，客户端因“字段存在”而跳过校准的问题；活跃数和总数
+  按实时刷新设置从 `main.status` 重新同步，手动刷新和重新进入下载页立即强制同步。
+- 修复实时状态合并回归：上传/下载速度、会话流量和连接状态持续使用 WebSocket 更新，部分帧不会
+  清空其他下载器的实时状态。
+- 优化站点首次进入：站点和站点配置响应的解析、索引及持久化整理移到后台任务，首帧优先显示缓存或
+  已收到的站点数据，避免大对象处理阻塞页面滚动。
+- qB 和 Transmission 统一只读取后端计数字段 `activeTorrentCount`、`pausedTorrentCount`、
+  `torrentCount`（兼容后端下划线写法 `torrent_count`），移除容易串值的 `active_count`、
+  `active_torrents` 等别名。
 - 修复任务中心重新打开时空白或长期停留骨架屏，新建任务模型会独立完成缓存和接口初始化。
 - 修复设置页管理、维护网格点击串联和重复箭头，每个入口使用独立按钮和统一导航路径。
 - 移除站点搜索栏下方重复的筛选结果标签，筛选弹窗应用后直接控制列表，角标继续显示生效数量。

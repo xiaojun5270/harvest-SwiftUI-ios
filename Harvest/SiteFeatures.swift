@@ -215,6 +215,15 @@ private struct SitePersistentCacheValue: @unchecked Sendable {
     let rows: [[String: Any]]
 }
 
+private struct SiteConfigDecodeResult: @unchecked Sendable {
+    let rows: [[String: Any]]
+    let indexed: [String: [String: Any]]
+}
+
+private struct SiteRawJSONPayload: @unchecked Sendable {
+    let value: Any
+}
+
 /// Serializes and persists the launch snapshot off the main actor. Keeping a
 /// single pending request also prevents several refresh completions from
 /// queueing redundant UserDefaults writes back-to-back.
@@ -932,17 +941,17 @@ final class SitesViewModel: ObservableObject {
                     performanceInterval.end()
                     return
                 }
-                let rows = jsonRows(cachedSites.value)
+                let rows = await Self.decodeSitesOffMain(cachedSites.value)
                 if sites.isEmpty || cachedAt.map({ cachedSites.cachedAt >= $0 }) != false {
                     suppressFilteredSitesRebuild = true
-                    sites = rows.map(SiteItem.init)
+                    sites = rows
                     cachedAt = cachedSites.cachedAt
                     usingCachedData = true
                     suppressFilteredSitesRebuild = false
                     rebuildFilteredSites()
                     isLoading = false
                     Self.writeFastSnapshot(
-                        rows.map(SiteItem.init).map { Self.siteFastSnapshotRow($0) },
+                        rows.map { Self.siteFastSnapshotRow($0) },
                         for: appState.baseURL,
                         cachedAt: cachedSites.cachedAt
                     )
@@ -957,7 +966,8 @@ final class SitesViewModel: ObservableObject {
                     return
                 }
                 suppressFilteredSitesRebuild = true
-                siteConfigs = Self.indexedConfigs(jsonRows(cachedConfigs.value))
+                let decodedConfigs = await Self.decodeSiteConfigsOffMain(cachedConfigs.value)
+                siteConfigs = decodedConfigs.indexed
                 lastConfigsLoadedAt = cachedConfigs.cachedAt
                 suppressFilteredSitesRebuild = false
                 rebuildFilteredSites()
@@ -1105,7 +1115,7 @@ final class SitesViewModel: ObservableObject {
                 configTask?.cancel()
                 return
             }
-            let refreshedSites = jsonRows(raw).map(SiteItem.init)
+            let refreshedSites = await Self.decodeSitesOffMain(raw)
             refreshLog("收到站点数据（\(refreshedSites.count) 个）")
             if refreshedSites.isEmpty, !sites.isEmpty, cached {
                 recordAppLog(.warning, "站点接口暂时返回空列表，继续显示本地缓存")
@@ -1152,8 +1162,20 @@ final class SitesViewModel: ObservableObject {
                     }
                     refreshLog("站点缓存已安排后台写入")
                 } else {
-                    let siteCacheRows = loadedSites.map { Self.sitePersistentCacheRow($0) }
-                    await appState.writeSessionCache(siteCacheRows, name: cacheKey)
+                    let sitesForCache = loadedSites
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              self.backgroundRefreshGeneration == generation,
+                              !Task.isCancelled else { return }
+                        let siteCacheRows = await Task.detached(priority: .utility) {
+                            SitePersistentCacheValue(
+                                rows: sitesForCache.map { SitesViewModel.sitePersistentCacheRow($0) }
+                            )
+                        }.value.rows
+                        guard self.backgroundRefreshGeneration == generation,
+                              !Task.isCancelled else { return }
+                        await appState.writeSessionCache(siteCacheRows, name: cacheKey)
+                    }
                 }
                 guard refreshIsCurrent() else {
                     configTask?.cancel()
@@ -1175,12 +1197,15 @@ final class SitesViewModel: ObservableObject {
         }
 
         var loadedConfigs: [[String: Any]]?
+        var loadedConfigIndex: [String: [String: Any]]?
         refreshLog("等待站点配置")
         if let configTask {
             switch await configTask.value {
             case let .success(raw):
                 guard refreshIsCurrent() else { return }
-                loadedConfigs = jsonRows(raw)
+                let decodedConfigs = await Self.decodeSiteConfigsOffMain(raw)
+                loadedConfigs = decodedConfigs.rows
+                loadedConfigIndex = decodedConfigs.indexed
                 refreshLog("收到站点配置（\(loadedConfigs?.count ?? 0) 条）")
             case let .failure(error):
                 guard refreshIsCurrent() else { return }
@@ -1192,7 +1217,7 @@ final class SitesViewModel: ObservableObject {
         }
 
         guard refreshIsCurrent() else { return }
-        let indexedConfigs = loadedConfigs.map(Self.indexedConfigs)
+        let indexedConfigs = loadedConfigIndex
         let configsLoadedAt = loadedConfigs == nil ? nil : Date()
         if !deferVisibleUpdate, let indexedConfigs {
             suppressFilteredSitesRebuild = true
@@ -1525,7 +1550,7 @@ final class SitesViewModel: ObservableObject {
         return row
     }
 
-    private static func indexedConfigs(_ configs: [[String: Any]]) -> [String: [String: Any]] {
+    nonisolated private static func indexedConfigs(_ configs: [[String: Any]]) -> [String: [String: Any]] {
         var indexed: [String: [String: Any]] = [:]
         indexed.reserveCapacity(configs.count)
         for config in configs {
@@ -1536,6 +1561,36 @@ final class SitesViewModel: ObservableObject {
             indexed[key] = config
         }
         return indexed
+    }
+
+    private static func decodeSitesOffMain(_ raw: Any) async -> [SiteItem] {
+        guard JSONSerialization.isValidJSONObject(raw) else {
+            return jsonRows(raw).map(SiteItem.init)
+        }
+        let payload = SiteRawJSONPayload(value: raw)
+        return await Task.detached(priority: .userInitiated) {
+            guard let data = try? JSONSerialization.data(withJSONObject: payload.value),
+                  let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+                return []
+            }
+            return jsonRows(object).map(SiteItem.init)
+        }.value
+    }
+
+    private static func decodeSiteConfigsOffMain(_ raw: Any) async -> SiteConfigDecodeResult {
+        guard JSONSerialization.isValidJSONObject(raw) else {
+            let rows = jsonRows(raw)
+            return SiteConfigDecodeResult(rows: rows, indexed: Self.indexedConfigs(rows))
+        }
+        let payload = SiteRawJSONPayload(value: raw)
+        return await Task.detached(priority: .utility) {
+            guard let data = try? JSONSerialization.data(withJSONObject: payload.value),
+                  let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+                return SiteConfigDecodeResult(rows: [], indexed: [:])
+            }
+            let rows = jsonRows(object)
+            return SiteConfigDecodeResult(rows: rows, indexed: Self.indexedConfigs(rows))
+        }.value
     }
 
     private func resolvedSiteType(for site: SiteItem) -> String {
