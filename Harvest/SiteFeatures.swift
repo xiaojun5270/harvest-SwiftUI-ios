@@ -437,6 +437,7 @@ final class SitesViewModel: ObservableObject {
     private static let legacyFastSnapshotKeys = ["sites.fastSnapshot.v2", "sites.fastSnapshot"]
     private static let fastSnapshotVersion = 3
     private static var fastSnapshotMemory: [String: FastSnapshot] = [:]
+    private static var fastSnapshotSitesMemory: [String: [SiteItem]] = [:]
     // Invalidating the cache advances this generation so an in-flight
     // background write cannot restore data that the user just cleared.
     private static var fastSnapshotWriteGeneration = 0
@@ -553,13 +554,6 @@ final class SitesViewModel: ObservableObject {
             ? sortField.defaultAscending
             : defaults.bool(forKey: SiteFilterStorageKey.ascending)
 
-        // Restore the launch snapshot before SwiftUI renders the first frame.
-        // Waiting until `.task` runs still produces a visible full-page
-        // "正在同步" flash on slower devices.
-        let storedServer = defaults.string(forKey: "harvest.baseURL") ?? ""
-        if !storedServer.isEmpty {
-            restoreFastSnapshot(for: storedServer)
-        }
     }
 
     private func rebuildFilteredSites() {
@@ -715,13 +709,24 @@ final class SitesViewModel: ObservableObject {
         // cache is looked up again. Only an empty model should show the full
         // page loading state.
         isLoading = sites.isEmpty
-        restoreFastSnapshot(for: server)
     }
 
-    private func restoreFastSnapshot(for server: String) {
-        guard sites.isEmpty, let snapshot = Self.readFastSnapshot(for: server) else { return }
+    private func restoreFastSnapshot(for server: String) async {
+        guard sites.isEmpty, let snapshot = await Self.readFastSnapshot(for: server) else { return }
+        let normalizedServer = Self.normalizedSnapshotServer(server)
+        let restoredSites: [SiteItem]
+        if let prepared = Self.fastSnapshotSitesMemory[normalizedServer] {
+            restoredSites = prepared
+        } else {
+            let rows = snapshot.rows
+            restoredSites = await Task.detached(priority: .userInitiated) {
+                rows.map(SiteItem.init)
+            }.value
+            Self.fastSnapshotSitesMemory[normalizedServer] = restoredSites
+        }
+        guard sites.isEmpty, !Task.isCancelled else { return }
         suppressFilteredSitesRebuild = true
-        sites = snapshot.rows.map(SiteItem.init)
+        sites = restoredSites
         cachedAt = snapshot.cachedAt
         usingCachedData = true
         suppressFilteredSitesRebuild = false
@@ -914,10 +919,10 @@ final class SitesViewModel: ObservableObject {
         var restoredFastSnapshot = false
         if !didRestoreCache {
             didRestoreCache = true
-            // Restore the small UserDefaults snapshot synchronously so the
-            // first frame can render without waiting for the actor-backed
-            // session cache or token restoration.
-            if sites.isEmpty { restoreFastSnapshot(for: appState.baseURL) }
+            // Decode the launch snapshot off the main actor. MainShell starts
+            // this preheat before the tab is selected, and this remains a safe
+            // fallback when the user opens Sites immediately after launch.
+            if sites.isEmpty { await restoreFastSnapshot(for: appState.baseURL) }
             restoredFastSnapshot = !sites.isEmpty && usingCachedData
             // The fast snapshot is intentionally enough to render the first
             // frame. Do not wait for the actor-backed disk cache before the
@@ -953,7 +958,8 @@ final class SitesViewModel: ObservableObject {
                     Self.writeFastSnapshot(
                         rows.map { Self.siteFastSnapshotRow($0) },
                         for: appState.baseURL,
-                        cachedAt: cachedSites.cachedAt
+                        cachedAt: cachedSites.cachedAt,
+                        sites: rows
                     )
                     // Give SwiftUI a render opportunity before the larger
                     // website configuration snapshot is decoded.
@@ -1138,7 +1144,8 @@ final class SitesViewModel: ObservableObject {
                 Self.writeFastSnapshot(
                     loadedSites.map { Self.siteFastSnapshotRow($0) },
                     for: appState.baseURL,
-                    cachedAt: Date()
+                    cachedAt: Date(),
+                    sites: loadedSites
                 )
                 if deferVisibleUpdate {
                     // Do not keep UIRefreshControl active while JSON encoding
@@ -1302,19 +1309,34 @@ final class SitesViewModel: ObservableObject {
         }
     }
 
-    private struct FastSnapshot {
+    private struct FastSnapshot: @unchecked Sendable {
         let rows: [[String: Any]]
         let cachedAt: Date
     }
 
     static func cachedSitesSnapshot(for server: String) -> [SiteItem] {
-        readFastSnapshot(for: server)?.rows.map(SiteItem.init) ?? []
+        let normalizedServer = normalizedSnapshotServer(server)
+        guard let snapshot = fastSnapshotMemory[normalizedServer],
+              Date().timeIntervalSince(snapshot.cachedAt) <= 180 * 24 * 60 * 60 else { return [] }
+        return fastSnapshotSitesMemory[normalizedServer] ?? []
+    }
+
+    static func preloadFastSnapshot(for server: String) async {
+        guard !server.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let normalizedServer = normalizedSnapshotServer(server)
+        guard fastSnapshotSitesMemory[normalizedServer] == nil,
+              let snapshot = await readFastSnapshot(for: server) else { return }
+        let rows = snapshot.rows
+        fastSnapshotSitesMemory[normalizedServer] = await Task.detached(priority: .utility) {
+            rows.map(SiteItem.init)
+        }.value
     }
 
     static func clearCachedSitesSnapshot() {
         fastSnapshotWriteGeneration &+= 1
         let generation = fastSnapshotWriteGeneration
         fastSnapshotMemory.removeAll(keepingCapacity: false)
+        fastSnapshotSitesMemory.removeAll(keepingCapacity: false)
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: fastSnapshotKey)
         legacyFastSnapshotKeys.forEach { defaults.removeObject(forKey: $0) }
@@ -1323,42 +1345,48 @@ final class SitesViewModel: ObservableObject {
         }
     }
 
-    private static func readFastSnapshot(for server: String) -> FastSnapshot? {
-        let defaults = UserDefaults.standard
+    private static func readFastSnapshot(for server: String) async -> FastSnapshot? {
         let keys = [fastSnapshotKey] + legacyFastSnapshotKeys
         let normalizedServer = normalizedSnapshotServer(server)
         if let snapshot = fastSnapshotMemory[normalizedServer],
            Date().timeIntervalSince(snapshot.cachedAt) <= 180 * 24 * 60 * 60 {
             return snapshot
         }
-        for key in keys {
-            guard let data = defaults.data(forKey: key),
-                  let decoded = try? JSONSerialization.jsonObject(with: data),
-                  let object = decoded as? [String: Any],
-                  let snapshotServer = object.string("server", "baseURL", "baseUrl"),
-                  normalizedSnapshotServer(snapshotServer) == normalizedServer,
-                  let rowsValue = object["rows"] else { continue }
+        let currentKey = fastSnapshotKey
+        let maximumVersion = fastSnapshotVersion
+        let result = await Task.detached(priority: .utility) { () -> (FastSnapshot, String)? in
+            let defaults = UserDefaults.standard
+            for key in keys {
+                guard let data = defaults.data(forKey: key),
+                      let decoded = try? JSONSerialization.jsonObject(with: data),
+                      let object = decoded as? [String: Any],
+                      let snapshotServer = object.string("server", "baseURL", "baseUrl"),
+                      normalizedSiteSnapshotServer(snapshotServer) == normalizedServer,
+                      let rowsValue = object["rows"] else { continue }
 
-            // Older snapshots did not always include a version or timestamp.
-            // The rows are still safe to render because they contain only the
-            // reduced site snapshot written by this view model. Treat a missing
-            // timestamp as now and let the network refresh replace it later.
-            let version = object.int("version") ?? 1
-            guard version <= fastSnapshotVersion else { continue }
-            let cachedAtValue = object.double("cachedAt", "cached_at", "timestamp")
-                ?? Date().timeIntervalSince1970
-            guard cachedAtValue.isFinite, cachedAtValue > 0 else { continue }
-            let age = Date().timeIntervalSince1970 - cachedAtValue
-            guard age <= 180 * 24 * 60 * 60 else { continue }
-            let rows = jsonRows(rowsValue)
-            guard !rows.isEmpty else { continue }
-            if key != fastSnapshotKey {
-                recordAppLog(.info, "兼容读取旧站点快照：\(key)，\(rows.count) 个站点")
+                // Older snapshots did not always include a version or timestamp.
+                // Treat a missing timestamp as now and let the network refresh
+                // replace it after the cached first frame is visible.
+                let version = object.int("version") ?? 1
+                guard version <= maximumVersion else { continue }
+                let cachedAtValue = object.double("cachedAt", "cached_at", "timestamp")
+                    ?? Date().timeIntervalSince1970
+                guard cachedAtValue.isFinite, cachedAtValue > 0 else { continue }
+                let age = Date().timeIntervalSince1970 - cachedAtValue
+                guard age <= 180 * 24 * 60 * 60 else { continue }
+                let rows = jsonRows(rowsValue)
+                guard !rows.isEmpty else { continue }
+                return (FastSnapshot(
+                    rows: rows,
+                    cachedAt: Date(timeIntervalSince1970: cachedAtValue)
+                ), key)
             }
-            let snapshot = FastSnapshot(
-                rows: rows,
-                cachedAt: Date(timeIntervalSince1970: cachedAtValue)
-            )
+            return nil
+        }.value
+        if let (snapshot, key) = result {
+            if key != currentKey {
+                recordAppLog(.info, "兼容读取旧站点快照：\(key)，\(snapshot.rows.count) 个站点")
+            }
             fastSnapshotMemory[normalizedServer] = snapshot
             return snapshot
         }
@@ -1368,7 +1396,8 @@ final class SitesViewModel: ObservableObject {
     private static func writeFastSnapshot(
         _ rows: [[String: Any]],
         for server: String,
-        cachedAt: Date
+        cachedAt: Date,
+        sites: [SiteItem]? = nil
     ) {
         guard !rows.isEmpty else { return }
         let normalizedServer = normalizedSnapshotServer(server)
@@ -1378,6 +1407,7 @@ final class SitesViewModel: ObservableObject {
             rows: rows,
             cachedAt: cachedAt
         )
+        if let sites { fastSnapshotSitesMemory[normalizedServer] = sites }
         let request = SiteFastSnapshotWriteRequest(
             rows: rows,
             server: normalizedServer,
@@ -1752,13 +1782,22 @@ private enum SitesContentSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private struct TelegramSitesSection: View {
+    @EnvironmentObject private var appState: AppState
+    @StateObject private var controller = TelegramSessionController.shared
+    @StateObject private var store = TelegramCheckinStore.shared
+
+    var body: some View {
+        TelegramBotsPanel(controller: controller, store: store)
+            .onAppear { controller.configureNotificationForwarding(appState) }
+    }
+}
+
 struct SitesView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openURL) private var openURL
     @Environment(\.harvestFlowEffectsPaused) private var parentFlowEffectsPaused
     @StateObject private var model = SitesViewModel()
-    @StateObject private var telegramController = TelegramSessionController.shared
-    @StateObject private var telegramStore = TelegramCheckinStore.shared
     @State private var selectedSection: SitesContentSection = .sites
     @State private var showAdd = false
     @State private var showFilters = false
@@ -1876,7 +1915,7 @@ struct SitesView: View {
                     }
                 }
             } else {
-                TelegramBotsPanel(controller: telegramController, store: telegramStore)
+                TelegramSitesSection()
             }
         }
         .navigationTitle("站点")
@@ -1886,11 +1925,9 @@ struct SitesView: View {
         // callback cannot leave the page stuck on the initial synchronizing view.
         .onAppear {
             isVisible = true
-            telegramController.configureNotificationForwarding(appState)
         }
         .onDisappear { isVisible = false }
         .task(id: appState.sessionGeneration) {
-            telegramController.configureNotificationForwarding(appState)
             model.prepareForSessionLoad(appState.sessionGeneration, server: appState.baseURL)
             await model.loadOnAppear(appState)
         }

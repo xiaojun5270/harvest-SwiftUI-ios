@@ -156,6 +156,8 @@ xcodebuild \
   清空其他下载器的实时状态。
 - 优化站点首次进入：站点和站点配置响应的解析、索引及持久化整理移到后台任务，首帧优先显示缓存或
   已收到的站点数据，避免大对象处理阻塞页面滚动。
+- 修复首次点击站点 Dock 仍会卡顿：启动后后台预热站点快照，移除 `SitesViewModel` 构造期间的同步
+  JSON 解码；Telegram/TDLib 与 Bot 历史改为切换到“TG 签到”时才初始化。
 - qB 和 Transmission 统一只读取后端计数字段 `activeTorrentCount`、`pausedTorrentCount`、
   `torrentCount`（兼容后端下划线写法 `torrent_count`），移除容易串值的 `active_count`、
   `active_torrents` 等别名。

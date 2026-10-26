@@ -2003,6 +2003,10 @@ struct MainShellView: View {
                 appState.requestAutomaticRefresh(force: true)
             }
         }
+        .task(id: appState.sessionGeneration) {
+            guard showsAdminTabs, !appState.baseURL.isEmpty else { return }
+            await SitesViewModel.preloadFastSnapshot(for: appState.baseURL)
+        }
         .task(id: appState.isAuthenticated) {
             guard appState.isAuthenticated else { return }
             await appState.requestNotificationAuthorization()

@@ -2272,6 +2272,7 @@ final class SearchViewModel: ObservableObject {
         }
 
         if sites.isEmpty {
+            await SitesViewModel.preloadFastSnapshot(for: appState.baseURL)
             publishSearchSites(SitesViewModel.cachedSitesSnapshot(for: appState.baseURL))
         }
         if sites.isEmpty, let cached = await appState.readSessionCache("site.info.list") {
