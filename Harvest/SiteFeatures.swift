@@ -1813,6 +1813,11 @@ struct SitesView: View {
     @State private var repeatingSite: SiteItem?
     @State private var isRunningGlobalAction = false
     @State private var isVisible = false
+    @State private var visibleSiteLimit = 12
+
+    private var visibleSites: [SiteItem] {
+        Array(model.filtered.prefix(visibleSiteLimit))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1869,7 +1874,7 @@ struct SitesView: View {
                             showUnreadSites: model.showUnreadSites
                         )
                         List {
-                            ForEach(model.filtered) { site in
+                            ForEach(visibleSites) { site in
                                 SiteRow(
                                     site: site,
                                     privacy: appState.privacyMode,
@@ -1896,9 +1901,21 @@ struct SitesView: View {
                                     Button { Task { await model.operate(appState, site: site, path: APIPath.siteStatus) } } label: { Label("刷新", systemImage: "arrow.clockwise") }.tint(HarvestTheme.blue)
                                     Button(role: .destructive) { deletingSite = site } label: { Label("删除", systemImage: "trash") }
                                 }
+                                .onAppear {
+                                    guard site.id == visibleSites.last?.id else { return }
+                                    loadMoreSites()
+                                }
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
+                            }
+                            if visibleSiteLimit < model.filtered.count {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                    .onAppear { loadMoreSites() }
                             }
                         }
                         .listStyle(.plain)
@@ -1938,6 +1955,9 @@ struct SitesView: View {
         .onReceive(NotificationCenter.default.publisher(for: .harvestLocalUIReset)) { _ in
             model.query = ""
             model.resetFilters()
+        }
+        .onChange(of: model.filtered.map(\.id)) { _, _ in
+            visibleSiteLimit = 12
         }
         .sheet(isPresented: $showAdd) { SiteEditorSheet(onSaved: { await model.load(appState, cached: false) }).environmentObject(appState) }
         .sheet(isPresented: $showFilters) { SiteFilterSheet(model: model) }
@@ -2011,6 +2031,11 @@ struct SitesView: View {
             }
             Button("取消", role: .cancel) { repeatingSite = nil }
         }
+    }
+
+    private func loadMoreSites() {
+        guard visibleSiteLimit < model.filtered.count else { return }
+        visibleSiteLimit = min(model.filtered.count, visibleSiteLimit + 12)
     }
 
     private func openBrowser(for site: SiteItem) {
@@ -3717,6 +3742,7 @@ private func siteReportedLevelID(_ site: SiteItem) -> Int? {
 
 struct SiteRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var isVisible = false
     let site: SiteItem
     let privacy: Bool
     let iconCandidates: [RemoteImageCandidate]
@@ -3785,6 +3811,8 @@ struct SiteRow: View {
         .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
         .allowsHitTesting(!isRefreshing)
         .accessibilityElement(children: .contain)
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
     }
 
     private var warningStrip: some View {
@@ -3832,7 +3860,7 @@ struct SiteRow: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 9) {
-            siteLogo(size: 48)
+            siteLogo(size: 48, isVisible: isVisible)
                 .contentShape(Circle())
                 .highPriorityGesture(
                     LongPressGesture(minimumDuration: 0.45)
@@ -4004,24 +4032,13 @@ struct SiteRow: View {
     }
 
     private var activitySection: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            HStack(spacing: 8) {
-                SiteDetailLine(
-                    icon: "clock.arrow.circlepath",
-                    label: "最近时间",
-                    value: recentTimeText(relativeTo: context.date),
-                    color: HarvestDesignSystem.Palette.siteActivity
-                )
-                if hasHRContent {
-                    SiteHeaderCompactMetric(
-                        icon: "exclamationmark.triangle.fill",
-                        label: "H&R",
-                        value: hrText,
-                        color: HarvestTheme.amber
-                    )
-                    .frame(maxWidth: 180, alignment: .trailing)
-                    .layoutPriority(1)
+        Group {
+            if isVisible {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    activityContent(relativeTo: context.date)
                 }
+            } else {
+                activityContent(relativeTo: Date())
             }
         }
         .padding(.horizontal, 7)
@@ -4033,17 +4050,47 @@ struct SiteRow: View {
         }
     }
 
-    private func siteLogo(size: CGFloat) -> some View {
+    @ViewBuilder
+    private func activityContent(relativeTo date: Date) -> some View {
+        HStack(spacing: 8) {
+            SiteDetailLine(
+                icon: "clock.arrow.circlepath",
+                label: "最近时间",
+                value: recentTimeText(relativeTo: date),
+                color: HarvestDesignSystem.Palette.siteActivity
+            )
+            if hasHRContent {
+                SiteHeaderCompactMetric(
+                    icon: "exclamationmark.triangle.fill",
+                    label: "H&R",
+                    value: hrText,
+                    color: HarvestTheme.amber
+                )
+                .frame(maxWidth: 180, alignment: .trailing)
+                .layoutPriority(1)
+            }
+        }
+    }
+
+    private func siteLogo(size: CGFloat, isVisible: Bool) -> some View {
         return ZStack {
             Circle()
                 .fill(Color.white)
-            CachedAnimatedRemoteImageCandidates(
-                candidates: iconCandidates,
-                maximumPixelSize: size * UIScreen.main.scale
-            ) {
-                Image(systemName: site.enabled ? "globe.asia.australia.fill" : "globe.asia.australia")
-                    .font(.system(size: size * 0.38, weight: .semibold))
-                    .foregroundStyle(site.enabled ? HarvestTheme.blue : Color.secondary)
+            Group {
+                if isVisible {
+                    CachedAnimatedRemoteImageCandidates(
+                        candidates: iconCandidates,
+                        maximumPixelSize: size * UIScreen.main.scale
+                    ) {
+                        Image(systemName: site.enabled ? "globe.asia.australia.fill" : "globe.asia.australia")
+                            .font(.system(size: size * 0.38, weight: .semibold))
+                            .foregroundStyle(site.enabled ? HarvestTheme.blue : Color.secondary)
+                    }
+                } else {
+                    Image(systemName: site.enabled ? "globe.asia.australia.fill" : "globe.asia.australia")
+                        .font(.system(size: size * 0.38, weight: .semibold))
+                        .foregroundStyle(site.enabled ? HarvestTheme.blue : Color.secondary)
+                }
             }
             .frame(width: size, height: size)
             .clipShape(Circle())

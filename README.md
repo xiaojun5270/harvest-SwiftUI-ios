@@ -158,6 +158,8 @@ xcodebuild \
   已收到的站点数据，避免大对象处理阻塞页面滚动。
 - 修复首次点击站点 Dock 仍会卡顿：启动后后台预热站点快照，移除 `SitesViewModel` 构造期间的同步
   JSON 解码；Telegram/TDLib 与 Bot 历史改为切换到“TG 签到”时才初始化。
+- 站点列表改为分批渲染，首屏最多创建 12 张卡片；图标/GIF 和相对时间只在卡片进入可视区域后加载，
+  滚动到底部再继续追加站点，避免首次点击一次性创建全部卡片。
 - qB 和 Transmission 统一只读取后端计数字段 `activeTorrentCount`、`pausedTorrentCount`、
   `torrentCount`（兼容后端下划线写法 `torrent_count`），移除容易串值的 `active_count`、
   `active_torrents` 等别名。
