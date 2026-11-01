@@ -497,11 +497,27 @@ struct TorrentItem: Identifiable, @unchecked Sendable {
         downloadLimit = json.double("downloadLimit", "dl_limit", "download_limit") ?? 0
         uploadLimit = json.double("uploadLimit", "up_limit", "upload_limit") ?? 0
         ratioLimit = json.double("seedRatioLimit", "ratio_limit", "share_ratio_limit") ?? 0
+        let trackerRows = json.rows("trackers", "trackerStats", "tracker_stats")
         queuePosition = json.int(
-            "queuePosition", "queue_position", "queuePositionId", "queue_position_id", "queueId", "queue_id"
+            "queuePosition", "queue_position", "queuePositionId", "queue_position_id", "queueId", "queue_id",
+            "priority", "position"
         ) ?? 0
-        seedCount = json.int("peersGettingFromUs", "num_seeds", "seeds") ?? 0
-        peerCount = json.int("peersSendingToUs", "num_leechs", "num_leeches", "peers") ?? 0
+        let trackerSeedCount = trackerRows.compactMap {
+            $0.int("seederCount", "seeder_count", "seeds", "num_seeds", "num_complete")
+        }.max()
+        seedCount = max(0, [
+            json.int("num_complete", "numComplete", "seederCount", "seeder_count"),
+            json.int("num_seeds", "numSeeds", "peersSendingToUs", "seeds", "seeders"),
+            trackerSeedCount
+        ].compactMap { $0 }.max() ?? 0)
+        let trackerPeerCount = trackerRows.compactMap {
+            $0.int("leecherCount", "leecher_count", "leeches", "num_leechs", "num_incomplete")
+        }.max()
+        peerCount = max(0, [
+            json.int("num_incomplete", "numIncomplete", "leecherCount", "leecher_count"),
+            json.int("num_leechs", "numLeechs", "num_leeches", "peersConnected", "peersGettingFromUs", "peers"),
+            trackerPeerCount
+        ].compactMap { $0 }.max() ?? 0)
         addedTimestamp = torrentTimestamp(json, keys: ["addedDate", "added_on", "added_at"])
         completedTimestamp = torrentTimestamp(json, keys: ["doneDate", "completion_on", "completed_at"])
         activityTimestamp = torrentTimestamp(json, keys: ["activityDate", "last_activity", "activity_at"])
@@ -512,7 +528,6 @@ struct TorrentItem: Identifiable, @unchecked Sendable {
             tags = text.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         }
         savePath = json.string("save_path", "savePath", "downloadDir", "download_dir") ?? ""
-        let trackerRows = json.rows("trackers", "trackerStats", "tracker_stats")
         trackerURLs = trackerRows.compactMap { $0.string("announce", "url", "tracker", "host") }
         if let direct = json.string("tracker", "tracker_url", "trackerUrl", "announce"), !direct.isEmpty {
             trackerURLs.insert(direct, at: 0)
@@ -622,6 +637,51 @@ private func torrentConfigStrings(_ value: Any?) -> [String] {
     return []
 }
 
+private func torrentRowContainsAny(_ row: [String: Any], keys: [String]) -> Bool {
+    keys.contains { row[$0] != nil }
+}
+
+private func torrentTrackerRowsContainAny(_ row: [String: Any], keys: [String]) -> Bool {
+    row.rows("trackers", "trackerStats", "tracker_stats").contains {
+        torrentRowContainsAny($0, keys: keys)
+    }
+}
+
+private func mergingTorrentSnapshotMetrics(_ item: TorrentItem, previous: TorrentItem?) -> TorrentItem {
+    guard let previous else { return item }
+    var merged = item
+    if !torrentRowContainsAny(
+        item.raw,
+        keys: [
+            "queuePosition", "queue_position", "queuePositionId", "queue_position_id",
+            "queueId", "queue_id", "priority", "position"
+        ]
+    ) {
+        merged.queuePosition = previous.queuePosition
+    }
+    let hasSeedTotal = torrentRowContainsAny(
+        item.raw,
+        keys: ["num_complete", "numComplete", "seederCount", "seeder_count", "seeds", "seeders"]
+    ) || torrentTrackerRowsContainAny(
+        item.raw,
+        keys: ["seederCount", "seeder_count", "seeds", "num_complete"]
+    )
+    if !hasSeedTotal, item.seedCount == 0 {
+        merged.seedCount = previous.seedCount
+    }
+    let hasPeerTotal = torrentRowContainsAny(
+        item.raw,
+        keys: ["num_incomplete", "numIncomplete", "leecherCount", "leecher_count"]
+    ) || torrentTrackerRowsContainAny(
+        item.raw,
+        keys: ["leecherCount", "leecher_count", "leeches", "num_incomplete"]
+    )
+    if !hasPeerTotal, item.peerCount == 0 {
+        merged.peerCount = previous.peerCount
+    }
+    return merged
+}
+
 private func torrentHosts(from text: String) -> [String] {
     torrentConfigStrings(text).compactMap { rawValue in
         var value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -692,6 +752,7 @@ private enum DownloaderRefreshDefaults {
     static let enabledKey = "downloads.refresh.enabled"
     static let intervalKey = "downloads.refresh.interval"
     static let durationKey = "downloads.refresh.duration"
+    static let speedInterval = 1
     static let interval = 5
     static let duration = 5
     static let range = 1...60
@@ -2090,7 +2151,7 @@ final class DownloadsViewModel: ObservableObject {
                     baseURL: appState.baseURL,
                     path: APIPath.downloaderSpeed,
                     token: appState.accessToken,
-                    subscription: ["interval": reference.value?.refreshInterval ?? DownloaderRefreshDefaults.interval]
+                    subscription: ["interval": DownloaderRefreshDefaults.speedInterval]
                 )
                 for try await event in stream {
                     guard reference.value?.isWatching == true, !Task.isCancelled else { return }
@@ -2367,8 +2428,17 @@ final class DownloadsViewModel: ObservableObject {
     ) {
         guard torrentSnapshotSignatures[downloaderID] != signature else { return }
         torrentSnapshotSignatures[downloaderID] = signature
+        let previousByID = Dictionary(
+            torrents.lazy
+                .filter { $0.downloaderID == downloaderID }
+                .map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let mergedIncoming = incoming.map { item in
+            mergingTorrentSnapshotMetrics(item, previous: previousByID[item.id])
+        }
         var updated = torrents.filter { $0.downloaderID != downloaderID }
-        updated.append(contentsOf: incoming)
+        updated.append(contentsOf: mergedIncoming)
         torrents = updated
         scheduleCachePersistence(appState)
     }
@@ -2814,12 +2884,16 @@ struct DownloaderRefreshSettingsSheet: View {
                 Section {
                     Toggle("自动刷新数据", isOn: $enabled)
                 } footer: {
-                    Text("关闭后停止下载器状态和速度的实时连接。")
+                    Text("实时速度固定每 1 秒更新；关闭后停止下载器状态和速度连接。")
                 }
 
                 if enabled {
-                    Section("刷新间隔") {
+                    Section {
                         refreshSlider(value: $interval, unit: "秒")
+                    } header: {
+                        Text("种子列表刷新间隔")
+                    } footer: {
+                        Text("仅控制种子全量列表，默认 5 秒；实时速度始终每 1 秒更新。")
                     }
                     Section {
                         refreshSlider(value: $duration, unit: "分钟")
@@ -4102,7 +4176,7 @@ struct TorrentRow: View {
 
     private var torrentFacts: some View {
         HStack(spacing: 4) {
-            torrentFact("队列", value: item.queuePosition > 0 ? "#\(item.queuePosition)" : "-")
+            torrentFact("队列", value: queueText)
             torrentFact("种子", value: "\(item.seedCount)")
             torrentFact("用户", value: "\(item.peerCount)")
             torrentFact("分享率", value: String(format: "%.2f", item.ratio))
@@ -4166,6 +4240,20 @@ struct TorrentRow: View {
         if total < 3_600 { return "\(total / 60)分" }
         if total < 86_400 { return "\(total / 3_600)时" }
         return "\(total / 86_400)天"
+    }
+
+    private var queueText: String {
+        let hasQueuePosition = torrentRowContainsAny(
+            item.raw,
+            keys: [
+                "queuePosition", "queue_position", "queuePositionId", "queue_position_id",
+                "queueId", "queue_id", "priority", "position"
+            ]
+        )
+        if downloaderIsTransmission(item.downloaderCategory), hasQueuePosition {
+            return "#\(max(0, item.queuePosition))"
+        }
+        return item.queuePosition > 0 ? "#\(item.queuePosition)" : "-"
     }
 
     private func torrentFact(_ label: String, value: String) -> some View {
