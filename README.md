@@ -160,6 +160,10 @@ xcodebuild \
   JSON 解码；Telegram/TDLib 与 Bot 历史改为切换到“TG 签到”时才初始化。
 - 站点列表改为分批渲染，首屏最多创建 12 张卡片；图标/GIF 和相对时间只在卡片进入可视区域后加载，
   滚动到底部再继续追加站点，避免首次点击一次性创建全部卡片。
+- 参考 Bit 远控助手的功能分层重新设计下载工作台（未复制其代码、资源和 UI）：增加全局实时速度趋势、
+  下载器控制台、种子状态快捷筛选，以及“概览 / Tracker / 文件 / Peer”四分页详情。
+- 下载器卡片直接提供任务、添加、限速、设置入口；种子卡片补充队列、种子、用户、分享率和剩余时间，
+  原有批量队列、校验、汇报、位置、分类、标签、分享限制和安全删除继续保留。
 - qB 和 Transmission 统一只读取后端计数字段 `activeTorrentCount`、`pausedTorrentCount`、
   `torrentCount`（兼容后端下划线写法 `torrent_count`），移除容易串值的 `active_count`、
   `active_torrents` 等别名。

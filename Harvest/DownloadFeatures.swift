@@ -1,4 +1,5 @@
 import Foundation
+import Charts
 import SwiftUI
 import UIKit
 
@@ -622,6 +623,13 @@ private struct DownloaderSpeedEventSnapshot: @unchecked Sendable {
     let event: [String: Any]?
 }
 
+struct DownloaderSpeedSample: Identifiable, Sendable {
+    let id = UUID()
+    let date: Date
+    let download: Double
+    let upload: Double
+}
+
 private struct TorrentFilterCriteria: @unchecked Sendable {
     let query: String
     let status: String
@@ -822,6 +830,7 @@ final class DownloadsViewModel: ObservableObject {
     @Published private(set) var cachedAt: Date?
     @Published private(set) var usingCachedData = false
     @Published private(set) var resolvingCountIDs: Set<Int> = []
+    @Published private(set) var speedHistory: [DownloaderSpeedSample] = []
     @Published private var derived = TorrentDerivedState()
     private var speedWatchTask: Task<Void, Never>?
     private var downloaderWatchTasks: [Int: Task<Void, Never>] = [:]
@@ -834,6 +843,7 @@ final class DownloadsViewModel: ObservableObject {
     private var statusBootstrapTask: Task<Void, Never>?
     private var countRefreshTask: Task<Void, Never>?
     private var lastCountRefreshAt: Date?
+    private var lastSpeedSampleAt: Date?
     private var filterRebuildTask: Task<Void, Never>?
     private var metadataRebuildTask: Task<Void, Never>?
     private var filterRebuildGeneration = 0
@@ -1956,6 +1966,9 @@ final class DownloadsViewModel: ObservableObject {
             usingCachedData = false
             cachedAt = nil
         }
+        if matchedLiveStatus {
+            appendSpeedSample(from: changed ? updated : downloaders)
+        }
         guard changed else { return }
         downloaders = updated
         scheduleCachePersistence(appState)
@@ -2158,6 +2171,25 @@ final class DownloadsViewModel: ObservableObject {
         return hasher.finalize()
     }
 
+    private func appendSpeedSample(from items: [DownloaderItem]) {
+        guard !includesTorrentData else { return }
+        let now = Date()
+        if let lastSpeedSampleAt,
+           now.timeIntervalSince(lastSpeedSampleAt) < TimeInterval(max(1, refreshInterval)) {
+            return
+        }
+        let enabled = items.filter(\.enabled)
+        speedHistory.append(DownloaderSpeedSample(
+            date: now,
+            download: enabled.reduce(0) { $0 + max(0, $1.downloadSpeed) },
+            upload: enabled.reduce(0) { $0 + max(0, $1.uploadSpeed) }
+        ))
+        if speedHistory.count > 48 {
+            speedHistory.removeFirst(speedHistory.count - 48)
+        }
+        lastSpeedSampleAt = now
+    }
+
 }
 
 private enum DownloaderToolMode: String {
@@ -2178,6 +2210,123 @@ private struct DownloaderToolPresentation: Identifiable {
     let downloader: DownloaderItem
     let mode: DownloaderToolMode
     var id: String { "\(downloader.id)-\(mode.rawValue)" }
+}
+
+private struct DownloaderFleetOverview: View {
+    let downloaders: [DownloaderItem]
+    let history: [DownloaderSpeedSample]
+
+    private var enabled: [DownloaderItem] { downloaders.filter(\.enabled) }
+    private var onlineCount: Int {
+        enabled.filter { item in
+            let state = item.connectionStatus.lowercased()
+            return item.hasLiveStatus && !state.contains("disconnected") && !state.contains("offline")
+        }.count
+    }
+    private var activeCount: Int { enabled.reduce(0) { $0 + $1.activeTorrentCount } }
+    private var totalCount: Int { enabled.reduce(0) { $0 + $1.totalTorrentCount } }
+    private var downloadSpeed: Double { enabled.reduce(0) { $0 + $1.downloadSpeed } }
+    private var uploadSpeed: Double { enabled.reduce(0) { $0 + $1.uploadSpeed } }
+    private var chartMaximum: Double {
+        max(1, history.reduce(0) { max($0, max($1.download, $1.upload)) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("传输中心")
+                        .font(.headline.weight(.semibold))
+                    Text("\(onlineCount) / \(enabled.count) 个下载器在线")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 10) {
+                    fleetSpeed("arrow.down", value: formatSpeed(downloadSpeed), color: HarvestTheme.blue)
+                    fleetSpeed("arrow.up", value: formatSpeed(uploadSpeed), color: HarvestTheme.green)
+                }
+            }
+
+            HStack(spacing: 8) {
+                fleetMetric("在线", value: "\(onlineCount)", icon: "network", color: HarvestTheme.green)
+                fleetMetric("活跃", value: "\(activeCount)", icon: "bolt.fill", color: HarvestTheme.amber)
+                fleetMetric("任务", value: "\(totalCount)", icon: "square.stack.3d.up.fill", color: HarvestTheme.blue)
+                fleetMetric("客户端", value: "\(downloaders.count)", icon: "externaldrive.fill", color: HarvestTheme.purple)
+            }
+
+            if history.count > 1 {
+                Chart(history) { sample in
+                    AreaMark(
+                        x: .value("时间", sample.date),
+                        y: .value("下载", sample.download)
+                    )
+                    .foregroundStyle(HarvestTheme.blue.opacity(0.10))
+                    .interpolationMethod(.catmullRom)
+                    LineMark(
+                        x: .value("时间", sample.date),
+                        y: .value("下载", sample.download),
+                        series: .value("方向", "下载")
+                    )
+                    .foregroundStyle(HarvestTheme.blue)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.catmullRom)
+                    LineMark(
+                        x: .value("时间", sample.date),
+                        y: .value("上传", sample.upload),
+                        series: .value("方向", "上传")
+                    )
+                    .foregroundStyle(HarvestTheme.green)
+                    .lineStyle(StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.catmullRom)
+                }
+                .chartYScale(domain: 0...chartMaximum)
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .chartLegend(.hidden)
+                .frame(height: 72)
+                .accessibilityLabel("下载器实时速度趋势")
+            }
+        }
+        .padding(14)
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 0.75)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func fleetSpeed(_ icon: String, value: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+            Text(value).monospacedDigit()
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(color)
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+    }
+
+    private func fleetMetric(_ label: String, value: String, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.subheadline.weight(.bold).monospacedDigit())
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
 }
 
 struct DownloadsView: View {
@@ -2203,6 +2352,12 @@ struct DownloadsView: View {
             if model.isLoading { LoadingState() }
             else {
                 LazyVStack(spacing: 16) {
+                    if !model.downloaders.isEmpty {
+                        DownloaderFleetOverview(
+                            downloaders: model.downloaders,
+                            history: model.speedHistory
+                        )
+                    }
                     downloaderListHeader
                     if model.downloaders.isEmpty {
                         EmptyState(
@@ -2809,57 +2964,45 @@ struct DownloaderCard: View {
         return item.hasLiveStatus && !state.contains("disconnected") && !state.contains("offline")
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
             downloaderHeader
-            downloaderStatusLine
-                .padding(.top, 7)
-                .padding(.bottom, 9)
 
-            Rectangle()
-                .fill(accentColor.opacity(0.42))
-                .frame(height: 2)
-
-            Button(action: onOpenTorrents) {
-                HStack(spacing: 0) {
-                    transferMetric(
-                        "下载",
-                        value: formatBytes(item.downloadedSession),
-                        speed: formatSpeed(item.downloadSpeed),
-                        icon: "arrow.down",
-                        color: HarvestTheme.blue
-                    )
-                    Divider().frame(height: 62)
-                    transferMetric(
-                        "上传",
-                        value: formatBytes(item.uploadedSession),
-                        speed: formatSpeed(item.uploadSpeed),
-                        icon: "arrow.up",
-                        color: HarvestTheme.green
-                    )
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.vertical, 8)
-            .accessibilityLabel("打开\(item.name)种子列表")
-
-            Divider()
-            HStack(spacing: 0) {
-                smallMetric("活跃", value: activeCountText, icon: "bolt.fill", color: HarvestTheme.green)
-                Divider().frame(height: 36)
-                smallMetric("总数", value: totalCountText, icon: "square.stack.3d.up", color: accentColor)
-                Divider().frame(height: 36)
-                smallMetric(
-                    "剩余空间",
-                    value: item.freeSpace > 0 ? formatBytes(item.freeSpace) : "-",
-                    icon: "internaldrive.fill",
-                    color: HarvestTheme.amber
+            HStack(spacing: 8) {
+                speedPanel(
+                    "下载",
+                    speed: item.downloadSpeed,
+                    session: item.downloadedSession,
+                    icon: "arrow.down",
+                    color: HarvestTheme.blue
+                )
+                speedPanel(
+                    "上传",
+                    speed: item.uploadSpeed,
+                    session: item.uploadedSession,
+                    icon: "arrow.up",
+                    color: HarvestTheme.green
                 )
             }
-            .padding(.vertical, 8)
+
+            HStack(spacing: 6) {
+                compactMetric("活跃", value: activeCountText, color: HarvestTheme.green)
+                compactMetric("暂停", value: "\(item.pausedTorrentCount)", color: HarvestTheme.amber)
+                compactMetric("总数", value: totalCountText, color: accentColor)
+                compactMetric(
+                    "可用空间",
+                    value: item.freeSpace > 0 ? formatBytes(item.freeSpace) : "-",
+                    color: HarvestTheme.purple
+                )
+            }
+
+            HStack(spacing: 8) {
+                quickAction("任务", icon: "list.bullet.rectangle", color: accentColor, action: onOpenTorrents)
+                quickAction("添加", icon: "plus", color: HarvestTheme.green, action: onAddTorrent)
+                quickAction("限速", icon: "gauge.with.dots.needle.67percent", color: HarvestTheme.amber, action: onSpeedSettings)
+                quickAction("设置", icon: "slider.horizontal.3", color: HarvestTheme.purple, action: onSettings)
+            }
 
             if item.uploadLimit > 0 || item.downloadLimit > 0 || item.alternativeSpeedEnabled {
-                Divider()
                 HStack(spacing: 8) {
                     Image(systemName: "gauge.with.dots.needle.33percent")
                         .font(.caption.weight(.semibold))
@@ -2878,13 +3021,22 @@ struct DownloaderCard: View {
                         }
                     }
                 }
-                .padding(.top, 8)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(HarvestTheme.amber.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
         }
-        .padding(13)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .harvestGlassSurface(cornerRadius: HarvestTheme.cardCornerRadius)
-        .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(accentColor.opacity(connected ? 0.18 : 0.08), lineWidth: 0.8)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityAction(named: Text("打开种子列表")) { onOpenTorrents() }
     }
 
@@ -2904,6 +3056,15 @@ struct DownloaderCard: View {
                         .frame(width: 6, height: 6)
                     Text(connected ? "在线" : "离线")
                         .foregroundStyle(connected ? HarvestTheme.green : HarvestTheme.coral)
+                    if item.main {
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(HarvestTheme.amber)
+                            .accessibilityLabel("主下载器")
+                    }
+                    if !item.enabled {
+                        Text("已停用")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -2938,80 +3099,67 @@ struct DownloaderCard: View {
         }
     }
 
-    private var downloaderStatusLine: some View {
-        CompactFlowLayout(spacing: 6) {
-            statusChip(
-                item.enabled ? "已启用" : "已停用",
-                icon: item.enabled ? "power" : "pause.circle.fill",
-                color: item.enabled ? accentColor : .secondary
-            )
-            statusChip(
-                item.brush ? "辅种关闭" : "辅种开启",
-                icon: "square.stack.3d.up",
-                color: item.brush ? .secondary : HarvestTheme.green
-            )
-            if item.main { statusChip("主下载器", icon: "star.fill", color: HarvestTheme.amber) }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func statusChip(_ label: String, icon: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 10, weight: .semibold))
-            Text(label).font(.caption2.weight(.semibold))
-        }
-        .foregroundStyle(color)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(color.opacity(0.10), in: Capsule())
-    }
-
-    private func transferMetric(_ label: String, value: String, speed: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+    private func speedPanel(_ label: String, speed: Double, session: Double, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
+                    .frame(width: 23, height: 23)
                     .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 Text(label)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Text(value)
-                    .font(.caption2.weight(.medium).monospacedDigit())
+                Text(formatBytes(session))
+                    .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .minimumScaleFactor(0.65)
             }
-            Text(speed)
+            Text(formatSpeed(speed))
                 .font(.title3.weight(.bold).monospacedDigit())
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .minimumScaleFactor(0.58)
+                .minimumScaleFactor(0.55)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
+        .padding(10)
+        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func smallMetric(_ label: String, value: String, icon: String, color: Color) -> some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(color)
-                    .frame(width: 15)
-                Text(label)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+    private func compactMetric(_ label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 3) {
             Text(value)
                 .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(.primary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
+                .minimumScaleFactor(0.48)
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 38)
         .padding(.horizontal, 4)
+        .background(color.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func quickAction(_ label: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(color)
+                Text(label)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private var activeCountText: String {
@@ -3077,10 +3225,15 @@ struct TorrentListView: View {
         max(0, model.activeFilterCount - (model.downloaderFilter == initialDownloader.id ? 1 : 0))
     }
 
+    private var downloaderTorrents: [TorrentItem] {
+        model.torrents.filter { $0.downloaderID == initialDownloader.id }
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 torrentSummary
+                torrentStatusStrip
                 if model.isLoading && model.filtered.isEmpty {
                     LoadingState()
                 } else if model.filtered.isEmpty {
@@ -3242,23 +3395,77 @@ struct TorrentListView: View {
     }
 
     private var torrentSummary: some View {
-        HStack(spacing: 0) {
-            summaryMetric("任务", value: "\(model.filtered.count)", color: HarvestTheme.coral)
-            Divider().frame(height: 34)
-            summaryMetric("下载", value: formatSpeed(model.filtered.reduce(0) { $0 + $1.downloadSpeed }), color: HarvestTheme.blue)
-            Divider().frame(height: 34)
-            summaryMetric("上传", value: formatSpeed(model.filtered.reduce(0) { $0 + $1.uploadSpeed }), color: HarvestTheme.green)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("任务概览")
+                        .font(.headline.weight(.semibold))
+                    Text("当前显示 \(model.filtered.count) / \(downloaderTorrents.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 10) {
+                    Label(formatSpeed(downloaderTorrents.reduce(0) { $0 + $1.downloadSpeed }), systemImage: "arrow.down")
+                        .foregroundStyle(HarvestTheme.blue)
+                    Label(formatSpeed(downloaderTorrents.reduce(0) { $0 + $1.uploadSpeed }), systemImage: "arrow.up")
+                        .foregroundStyle(HarvestTheme.green)
+                }
+                .font(.caption.weight(.semibold).monospacedDigit())
+            }
+            HStack(spacing: 7) {
+                summaryMetric("下载中", value: "\(downloaderTorrents.filter { $0.downloadSpeed > 0 }.count)", color: HarvestTheme.blue)
+                summaryMetric("做种中", value: "\(downloaderTorrents.filter { $0.progress >= 0.999 || $0.uploadSpeed > 0 }.count)", color: HarvestTheme.green)
+                summaryMetric("已暂停", value: "\(downloaderTorrents.filter { torrentStatusCode($0) == 0 }.count)", color: HarvestTheme.amber)
+                summaryMetric("错误", value: "\(downloaderTorrents.filter(\.hasError).count)", color: HarvestTheme.coral)
+            }
         }
-        .padding(.vertical, 10)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
+        .padding(12)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 0.75)
+        }
     }
 
     private func summaryMetric(_ label: String, value: String, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.caption.weight(.bold).monospacedDigit()).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.6)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.subheadline.weight(.bold).monospacedDigit())
+                .foregroundStyle(color)
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var torrentStatusStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(model.statusFilters, id: \.self) { status in
+                    Button {
+                        model.filter = status
+                    } label: {
+                        Text(status)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(model.filter == status ? Color.white : Color.secondary)
+                            .padding(.horizontal, 11)
+                            .frame(height: 30)
+                            .background(
+                                model.filter == status ? HarvestTheme.blue : Color.primary.opacity(0.055),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .accessibilityLabel("种子状态筛选")
     }
 
     private func toggleSelection(_ torrent: TorrentItem) {
@@ -3551,6 +3758,12 @@ struct TorrentRow: View {
                 Menu {
                     Button { Task { await model.control(appState, torrent: item, command: "resume") } } label: { Label("开始", systemImage: "play") }
                     Button { Task { await model.control(appState, torrent: item, command: "pause") } } label: { Label("暂停", systemImage: "pause") }
+                    Button {
+                        Task { _ = await model.execute(appState, torrents: [item], qbCommand: "recheck", trCommand: "verify_torrent") }
+                    } label: { Label("重新校验", systemImage: "checkmark.shield") }
+                    Button {
+                        Task { _ = await model.execute(appState, torrents: [item], qbCommand: "reannounce", trCommand: "reannounce_torrent") }
+                    } label: { Label("重新汇报", systemImage: "megaphone") }
                     Button(action: onAdvanced) { Label("高级操作", systemImage: "slider.horizontal.3") }
                     Menu {
                         copyButton("名称", value: item.name, icon: "textformat")
@@ -3581,6 +3794,13 @@ struct TorrentRow: View {
             }
             .font(.caption2.monospacedDigit())
             .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                torrentFact("队列", value: item.queuePosition > 0 ? "#\(item.queuePosition)" : "-")
+                torrentFact("种子", value: "\(item.seedCount)")
+                torrentFact("用户", value: "\(item.peerCount)")
+                torrentFact("分享率", value: String(format: "%.2f", item.ratio))
+                torrentFact("剩余", value: etaText)
+            }
         }
         .cardSurface()
         .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
@@ -3627,6 +3847,32 @@ struct TorrentRow: View {
         if !item.category.isEmpty { values.append(item.category) }
         if !item.tags.isEmpty { values.append(item.tags.prefix(2).joined(separator: ", ")) }
         return values.joined(separator: " · ")
+    }
+
+    private var etaText: String {
+        let seconds = torrentETA(item)
+        guard seconds > 0, seconds < Double.greatestFiniteMagnitude else {
+            return item.remaining <= 0 ? "完成" : "∞"
+        }
+        let total = max(0, clampedInt(seconds))
+        if total < 60 { return "<1分" }
+        if total < 3_600 { return "\(total / 60)分" }
+        if total < 86_400 { return "\(total / 3_600)时" }
+        return "\(total / 86_400)天"
+    }
+
+    private func torrentFact(_ label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+            Text(label)
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 30)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
     private func copyButton(_ title: String, value: String, icon: String) -> some View {
@@ -3891,6 +4137,15 @@ struct TorrentAdvancedActionsSheet: View {
     }
 }
 
+private enum TorrentDetailTab: String, CaseIterable, Identifiable {
+    case overview = "概览"
+    case trackers = "Tracker"
+    case files = "文件"
+    case peers = "Peer"
+
+    var id: String { rawValue }
+}
+
 struct TorrentDetailSheet: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -3899,77 +4154,27 @@ struct TorrentDetailSheet: View {
     @State private var detail: [String: Any]?
     @State private var isLoading = true
     @State private var loadError = ""
+    @State private var selectedTab = TorrentDetailTab.overview
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("传输") {
-                    LabeledContent("状态", value: item.status)
-                    LabeledContent("进度", value: "\(clampedInt(normalizedProgress(item.progress) * 100))%")
-                    LabeledContent("大小", value: formatBytes(item.size))
-                    LabeledContent("分享率", value: String(format: "%.2f", item.ratio))
-                    LabeledContent("下载速度", value: formatSpeed(item.downloadSpeed))
-                    LabeledContent("上传速度", value: formatSpeed(item.uploadSpeed))
-                }
-                Section("存储与分类") {
-                    if !item.siteHint.isEmpty {
-                        LabeledContent(
-                            "站点",
-                            value: privacyMaskedText(item.siteHint, enabled: appState.privacyMode)
-                        )
-                    }
-                    LabeledContent("分类", value: item.category.isEmpty ? "未分类" : item.category)
-                    LabeledContent("标签", value: item.tags.isEmpty ? "无" : item.tags.joined(separator: "、"))
-                    if !savePath.isEmpty { LabeledContent("保存路径", value: savePath) }
-                    if !contentPath.isEmpty { LabeledContent("内容路径", value: contentPath) }
-                    if !addedAt.isEmpty { LabeledContent("添加时间", value: addedAt) }
-                    if !activityAt.isEmpty { LabeledContent("活动时间", value: activityAt) }
-                    if let totalSize, totalSize > 0 { LabeledContent("总大小", value: formatBytes(totalSize)) }
-                }
-                if isLoading { Section { ProgressView().frame(maxWidth: .infinity) } }
-                if !loadError.isEmpty {
-                    Section { Label(loadError, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(HarvestTheme.coral) }
-                }
-                if !trackers.isEmpty {
-                    Section("Tracker") {
-                        ForEach(Array(trackers.enumerated()), id: \.offset) { _, tracker in
-                            VStack(alignment: .leading, spacing: 6) {
-                                let url = tracker.string("announce", "url", "tracker", "host") ?? "未知 Tracker"
-                                Text(tracker.string("host") ?? url).font(.subheadline.weight(.medium)).lineLimit(1)
-                                if tracker.string("host") != nil, tracker.string("host") != url {
-                                    Text(url).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
-                                }
-                                let seeds = tracker.int("seeds", "seederCount", "num_seeds")
-                                let leeches = tracker.int("leeches", "leecherCount", "num_leeches")
-                                let message = tracker.string("msg", "message", "lastAnnounceResult", "last_announce_result") ?? ""
-                                HStack(spacing: 12) {
-                                    if let seeds { Label("\(seeds)", systemImage: "arrow.up.circle") }
-                                    if let leeches { Label("\(leeches)", systemImage: "arrow.down.circle") }
-                                    if let status = tracker.string("status"), !status.isEmpty { Text(status) }
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                if !message.isEmpty { Text(message).font(.caption2).foregroundStyle(.secondary) }
-                            }
-                            .textSelection(.enabled)
-                            .padding(.vertical, 3)
-                        }
+            VStack(spacing: 0) {
+                detailHeader
+                Picker("详情分类", selection: $selectedTab) {
+                    ForEach(TorrentDetailTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
                     }
                 }
-                if !files.isEmpty {
-                    Section("文件") {
-                        OutlineGroup(fileTree, children: \.outlineChildren) { node in
-                            TorrentFileTreeLabel(node: node)
-                        }
-                    }
-                }
-                Section("原始详情") { Text(prettyJSON(resolved)).font(.caption2.monospaced()).textSelection(.enabled) }
-                Section {
-                    Button { Task { await model.control(appState, torrent: item, command: "resume"); dismiss() } } label: { Label("开始", systemImage: "play.fill") }
-                    Button { Task { await model.control(appState, torrent: item, command: "pause"); dismiss() } } label: { Label("暂停", systemImage: "pause.fill") }
-                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                detailContent
+                    .refreshable { await load() }
             }
-            .navigationTitle(item.name).navigationBarTitleDisplayMode(.inline)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationTitle("种子详情")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Task { await refreshDetail() } } label: { Image(systemName: "arrow.clockwise") }
@@ -3978,15 +4183,250 @@ struct TorrentDetailSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
+            .safeAreaInset(edge: .bottom) { actionBar }
             .task { await load() }
-            .refreshable { await load() }
+            .overlay {
+                if isLoading && detail == nil {
+                    ProgressView()
+                        .controlSize(.large)
+                        .padding(22)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
         }
+    }
+
+    private var detailHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(item.name)
+                .font(.headline.weight(.semibold))
+                .lineLimit(2)
+            TorrentStateProgressBar(
+                progress: normalizedProgress(item.progress),
+                colors: item.hasError
+                    ? [HarvestTheme.coral, Color.red]
+                    : [HarvestTheme.blue, HarvestTheme.green]
+            )
+            HStack(spacing: 8) {
+                detailHeaderMetric("状态", value: item.status, color: item.hasError ? HarvestTheme.coral : HarvestTheme.blue)
+                detailHeaderMetric("下载", value: formatSpeed(item.downloadSpeed), color: HarvestTheme.blue)
+                detailHeaderMetric("上传", value: formatSpeed(item.uploadSpeed), color: HarvestTheme.green)
+                detailHeaderMetric("分享率", value: String(format: "%.2f", item.ratio), color: HarvestTheme.amber)
+            }
+            if !loadError.isEmpty {
+                Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(HarvestTheme.coral)
+            }
+        }
+        .padding(14)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func detailHeaderMetric(_ label: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .foregroundStyle(color)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+        .padding(.horizontal, 7)
+        .background(color.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch selectedTab {
+        case .overview:
+            overviewList
+        case .trackers:
+            trackerList
+        case .files:
+            fileList
+        case .peers:
+            peerList
+        }
+    }
+
+    private var overviewList: some View {
+        List {
+            Section("任务") {
+                LabeledContent("进度", value: "\(clampedInt(normalizedProgress(item.progress) * 100))%")
+                LabeledContent("大小", value: formatBytes(item.size))
+                if let totalSize, totalSize > 0 { LabeledContent("总大小", value: formatBytes(totalSize)) }
+                LabeledContent("种子 / 用户", value: "\(item.seedCount) / \(item.peerCount)")
+                LabeledContent("队列位置", value: item.queuePosition > 0 ? "#\(item.queuePosition)" : "-")
+            }
+            Section("存储与归类") {
+                if !item.siteHint.isEmpty {
+                    LabeledContent("站点", value: privacyMaskedText(item.siteHint, enabled: appState.privacyMode))
+                }
+                LabeledContent("分类", value: item.category.isEmpty ? "未分类" : item.category)
+                LabeledContent("标签", value: item.tags.isEmpty ? "无" : item.tags.joined(separator: "、"))
+                if !savePath.isEmpty { LabeledContent("保存路径", value: savePath) }
+                if !contentPath.isEmpty { LabeledContent("内容路径", value: contentPath) }
+            }
+            Section("时间") {
+                if !addedAt.isEmpty { LabeledContent("添加时间", value: addedAt) }
+                if !activityAt.isEmpty { LabeledContent("最后活动", value: activityAt) }
+                if addedAt.isEmpty && activityAt.isEmpty { Text("暂无时间信息").foregroundStyle(.secondary) }
+            }
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    private var trackerList: some View {
+        List {
+            if trackers.isEmpty {
+                ContentUnavailableView("暂无 Tracker", systemImage: "network")
+            } else {
+                ForEach(Array(trackers.enumerated()), id: \.offset) { _, tracker in
+                    trackerRow(tracker)
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    private func trackerRow(_ tracker: [String: Any]) -> some View {
+        let url = tracker.string("announce", "url", "tracker", "host") ?? "未知 Tracker"
+        let host = tracker.string("host") ?? URL(string: url)?.host ?? url
+        let seeds = tracker.int("seeds", "seederCount", "num_seeds") ?? 0
+        let leeches = tracker.int("leeches", "leecherCount", "num_leeches") ?? 0
+        let status = tracker.string("status") ?? ""
+        let message = tracker.string("msg", "message", "lastAnnounceResult", "last_announce_result") ?? ""
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Image(systemName: message.lowercased().contains("error") ? "exclamationmark.triangle.fill" : "antenna.radiowaves.left.and.right")
+                    .foregroundStyle(message.lowercased().contains("error") ? HarvestTheme.coral : HarvestTheme.green)
+                Text(host).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Spacer()
+                if !status.isEmpty { Text(status).font(.caption2).foregroundStyle(.secondary) }
+            }
+            Text(url).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+            HStack(spacing: 14) {
+                Label("\(seeds)", systemImage: "arrow.up.circle")
+                Label("\(leeches)", systemImage: "arrow.down.circle")
+                if !message.isEmpty { Text(message).lineLimit(1) }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 5)
+        .textSelection(.enabled)
+    }
+
+    private var fileList: some View {
+        List {
+            if files.isEmpty {
+                ContentUnavailableView("暂无文件信息", systemImage: "doc")
+            } else {
+                OutlineGroup(fileTree, children: \.outlineChildren) { node in
+                    TorrentFileTreeLabel(node: node)
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    private var peerList: some View {
+        List {
+            if peers.isEmpty {
+                ContentUnavailableView("暂无 Peer 信息", systemImage: "person.2")
+            } else {
+                ForEach(Array(peers.enumerated()), id: \.offset) { _, peer in
+                    peerRow(peer)
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    private func peerRow(_ peer: [String: Any]) -> some View {
+        let address = peer.string("ip", "address", "host") ?? "未知地址"
+        let port = peer.int("port")
+        let client = peer.string("client", "clientName", "client_name") ?? "未知客户端"
+        let rawProgress = peer.double("progress", "percentDone", "percent_done") ?? 0
+        let progress = rawProgress > 1 ? rawProgress / 100 : rawProgress
+        let download = peer.double("dl_speed", "downloadSpeed", "rateToClient", "rate_to_client") ?? 0
+        let upload = peer.double("up_speed", "uploadSpeed", "rateToPeer", "rate_to_peer") ?? 0
+        return HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(HarvestTheme.blue.opacity(0.10))
+                Image(systemName: "person.fill").foregroundStyle(HarvestTheme.blue)
+            }
+            .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(port.map { "\(address):\($0)" } ?? address)
+                    .font(.subheadline.weight(.semibold).monospaced())
+                    .lineLimit(1)
+                Text(client).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                ProgressView(value: min(max(progress, 0), 1)).tint(HarvestTheme.blue)
+            }
+            Spacer(minLength: 6)
+            VStack(alignment: .trailing, spacing: 3) {
+                Label(formatSpeed(download), systemImage: "arrow.down")
+                    .foregroundStyle(HarvestTheme.blue)
+                Label(formatSpeed(upload), systemImage: "arrow.up")
+                    .foregroundStyle(HarvestTheme.green)
+            }
+            .font(.caption2.monospacedDigit())
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 9) {
+            detailAction("开始", icon: "play.fill", color: HarvestTheme.green) {
+                await model.control(appState, torrent: item, command: "resume")
+            }
+            detailAction("暂停", icon: "pause.fill", color: HarvestTheme.amber) {
+                await model.control(appState, torrent: item, command: "pause")
+            }
+            detailAction("校验", icon: "checkmark.shield.fill", color: HarvestTheme.blue) {
+                _ = await model.execute(appState, torrents: [item], qbCommand: "recheck", trCommand: "verify_torrent")
+            }
+            detailAction("汇报", icon: "megaphone.fill", color: HarvestTheme.purple) {
+                _ = await model.execute(appState, torrents: [item], qbCommand: "reannounce", trCommand: "reannounce_torrent")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func detailAction(
+        _ label: String,
+        icon: String,
+        color: Color,
+        action: @escaping () async -> Void
+    ) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon).foregroundStyle(color)
+                Text(label).font(.caption2.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 38)
+        }
+        .buttonStyle(.plain)
     }
 
     private var resolved: [String: Any] { detail ?? item.raw }
     private var properties: [String: Any] { resolved.dict("properties", "props") ?? [:] }
     private var files: [[String: Any]] { resolved.rows("files", "contents", "fileStats") }
     private var fileTree: [TorrentFileNode] { buildTorrentFileTree(files) }
+    private var peers: [[String: Any]] {
+        resolved.rows("peers", "peerStats", "peer_stats", "torrentPeers", "torrent_peers")
+    }
     private var trackers: [[String: Any]] {
         let values = resolved.rows("trackers", "trackerStats", "tracker_stats")
         let candidates: [[String: Any]]
@@ -4037,6 +4477,8 @@ private struct TorrentFileNode: Identifiable {
     let name: String
     let size: Double
     let progress: Double
+    let priority: Int?
+    let wanted: Bool?
     let children: [TorrentFileNode]
 
     var outlineChildren: [TorrentFileNode]? { children.isEmpty ? nil : children }
@@ -4054,7 +4496,14 @@ private final class TorrentFileTreeBuilder {
         self.path = path
     }
 
-    func insert(parts: ArraySlice<String>, size: Double, progress: Double, index: Int) {
+    func insert(
+        parts: ArraySlice<String>,
+        size: Double,
+        progress: Double,
+        priority: Int?,
+        wanted: Bool?,
+        index: Int
+    ) {
         guard let part = parts.first else { return }
         if parts.count == 1 {
             let filePath = path.isEmpty ? part : "\(path)/\(part)"
@@ -4063,6 +4512,8 @@ private final class TorrentFileTreeBuilder {
                 name: part,
                 size: size,
                 progress: progress,
+                priority: priority,
+                wanted: wanted,
                 children: []
             ))
             return
@@ -4070,7 +4521,14 @@ private final class TorrentFileTreeBuilder {
         let folderPath = path.isEmpty ? part : "\(path)/\(part)"
         let folder = folders[part] ?? TorrentFileTreeBuilder(name: part, path: folderPath)
         folders[part] = folder
-        folder.insert(parts: parts.dropFirst(), size: size, progress: progress, index: index)
+        folder.insert(
+            parts: parts.dropFirst(),
+            size: size,
+            progress: progress,
+            priority: priority,
+            wanted: wanted,
+            index: index
+        )
     }
 
     func frozenChildren() -> [TorrentFileNode] {
@@ -4090,6 +4548,8 @@ private final class TorrentFileTreeBuilder {
                 name: folder.name,
                 size: totalSize,
                 progress: progress,
+                priority: nil,
+                wanted: nil,
                 children: children
             )
         }
@@ -4108,7 +4568,16 @@ private func buildTorrentFileTree(_ files: [[String: Any]]) -> [TorrentFileNode]
         let size = max(0, file.double("length", "size") ?? 0)
         let rawProgress = file.double("progress", "availability", "percentDone", "percent_done") ?? 0
         let progress = min(1, max(0, rawProgress > 1 ? rawProgress / 100 : rawProgress))
-        root.insert(parts: normalizedParts[...], size: size, progress: progress, index: index)
+        let priority = file.int("priority", "download_priority")
+        let wanted = file.bool("wanted", "is_wanted")
+        root.insert(
+            parts: normalizedParts[...],
+            size: size,
+            progress: progress,
+            priority: priority,
+            wanted: wanted,
+            index: index
+        )
     }
     return root.frozenChildren()
 }
@@ -4125,6 +4594,13 @@ private struct TorrentFileTreeLabel: View {
                 Spacer(minLength: 8)
                 if node.isFolder {
                     Text("\(node.children.count) 项").font(.caption2).foregroundStyle(.secondary)
+                } else if let priorityText = filePriorityText {
+                    Text(priorityText)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(filePriorityColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(filePriorityColor.opacity(0.08), in: Capsule())
                 }
             }
             HStack {
@@ -4138,6 +4614,23 @@ private struct TorrentFileTreeLabel: View {
                 .tint(node.progress >= 1 ? HarvestTheme.green : HarvestTheme.blue)
         }
         .padding(.vertical, 2)
+    }
+
+    private var filePriorityText: String? {
+        if node.wanted == false || node.priority == 0 { return "不下载" }
+        switch node.priority {
+        case 1: return "普通"
+        case 6: return "高"
+        case 7: return "最高"
+        case -1: return "低"
+        default: return node.wanted == true ? "已选择" : nil
+        }
+    }
+
+    private var filePriorityColor: Color {
+        if node.wanted == false || node.priority == 0 { return .secondary }
+        if node.priority == 6 || node.priority == 7 { return HarvestTheme.coral }
+        return HarvestTheme.blue
     }
 }
 
