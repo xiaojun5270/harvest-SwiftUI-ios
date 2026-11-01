@@ -591,14 +591,10 @@ private func torrentHosts(from text: String) -> [String] {
 }
 
 private func decodeTorrentItems(
-    from data: Data,
+    from value: Any,
     downloaderID: Int,
     downloaderCategory: String
-) -> [TorrentItem]? {
-    guard let value = try? JSONSerialization.jsonObject(
-        with: data,
-        options: [.fragmentsAllowed]
-    ) else { return nil }
+) -> [TorrentItem] {
     let rows = jsonRows(value)
     var items: [TorrentItem] = []
     items.reserveCapacity(rows.count)
@@ -714,6 +710,15 @@ private struct FilteredTorrentSnapshot: @unchecked Sendable {
 private struct DecodedTorrentSnapshot: @unchecked Sendable {
     let items: [TorrentItem]
     let signature: Int
+}
+
+private struct TorrentCacheRowsSnapshot: @unchecked Sendable {
+    let rows: [[String: Any]]
+    let focusedDownloaderID: Int?
+}
+
+private struct TorrentRawResponse: @unchecked Sendable {
+    let value: Any
 }
 
 private func resolvedTorrentSiteLabel(
@@ -842,7 +847,15 @@ final class DownloadsViewModel: ObservableObject {
 
     @Published var downloaders: [DownloaderItem] = []
     private(set) var torrents: [TorrentItem] = [] {
-        didSet { scheduleTorrentMetadataRebuild() }
+        didSet {
+            if canShowImmediateTorrentPreview {
+                var next = derived
+                next.filtered = torrents
+                derived = next
+            }
+            scheduleFilteredTorrentRebuild()
+            scheduleTorrentMetadataRebuild()
+        }
     }
     private(set) var sites: [SiteItem] = [] {
         didSet {
@@ -919,10 +932,13 @@ final class DownloadsViewModel: ObservableObject {
     private let fallbackSessionCacheKey: String?
     private let includesTorrentData: Bool
     private let focusedDownloaderID: Int?
+    private let focusedDownloader: DownloaderItem?
 
-    init(includesTorrentData: Bool = true, focusedDownloaderID: Int? = nil) {
+    init(includesTorrentData: Bool = true, focusedDownloader: DownloaderItem? = nil) {
         self.includesTorrentData = includesTorrentData
-        self.focusedDownloaderID = focusedDownloaderID
+        self.focusedDownloader = focusedDownloader
+        self.focusedDownloaderID = focusedDownloader?.id
+        let focusedDownloaderID = focusedDownloader?.id
         if includesTorrentData, let focusedDownloaderID {
             self.sessionCacheKey = "downloads.torrents.\(focusedDownloaderID).snapshot.v1"
             self.fallbackSessionCacheKey = "downloads.snapshot.v1"
@@ -931,6 +947,9 @@ final class DownloadsViewModel: ObservableObject {
                 ? "downloads.snapshot.v1"
                 : "downloads.downloaders.snapshot.v1"
             self.fallbackSessionCacheKey = nil
+        }
+        if let focusedDownloader {
+            self.downloaders = [focusedDownloader]
         }
     }
 
@@ -963,6 +982,17 @@ final class DownloadsViewModel: ObservableObject {
     }
 
     var filtered: [TorrentItem] { derived.filtered }
+
+    private var canShowImmediateTorrentPreview: Bool {
+        query.isEmpty
+            && filter == "全部"
+            && categoryFilter.isEmpty
+            && tagFilters.isEmpty
+            && siteFilter.isEmpty
+            && sortField == .queuePosition
+            && sortAscending
+            && (downloaderFilter == 0 || torrents.allSatisfy { $0.downloaderID == downloaderFilter })
+    }
 
     private func filterInputsDidChange(debounced: Bool = false) {
         if isBatchingFilterUpdates {
@@ -1108,25 +1138,36 @@ final class DownloadsViewModel: ObservableObject {
         }
     }
 
-    func load(_ appState: AppState) async {
+    func prepareCachedData(_ appState: AppState) async {
         await restoreCacheIfNeeded(appState)
         applyLatestDownloaderSpeedValues(appState: appState)
-        isLoading = downloaders.isEmpty && torrents.isEmpty
+    }
+
+    func load(_ appState: AppState) async {
+        await prepareCachedData(appState)
+        isLoading = includesTorrentData ? torrents.isEmpty : downloaders.isEmpty
         defer {
             isLoading = false
             reconcileWatching(appState)
         }
         do {
             let previousDownloaders = downloaders
-            let raw = try await appState.api(
-                APIPath.downloaders,
-                query: ["with_status": includesTorrentData],
-                timeoutInterval: includesTorrentData ? 15 : 10
-            )
-            downloaders = mergingDownloaderConfigurations(
-                jsonRows(raw).map(DownloaderItem.init),
-                previous: previousDownloaders
-            )
+            if let focusedDownloader {
+                downloaders = mergingDownloaderConfigurations(
+                    [focusedDownloader],
+                    previous: previousDownloaders
+                )
+            } else {
+                let raw = try await appState.api(
+                    APIPath.downloaders,
+                    query: ["with_status": includesTorrentData],
+                    timeoutInterval: includesTorrentData ? 15 : 10
+                )
+                downloaders = mergingDownloaderConfigurations(
+                    jsonRows(raw).map(DownloaderItem.init),
+                    previous: previousDownloaders
+                )
+            }
             applyLatestDownloaderSpeedValues(appState: appState)
             // The compact downloads screen only needs aggregate downloader status.
             guard includesTorrentData else {
@@ -1154,13 +1195,10 @@ final class DownloadsViewModel: ObservableObject {
                                 "\(APIPath.downloaderMain)\(downloaderID)",
                                 timeoutInterval: 15
                             )
-                            guard JSONSerialization.isValidJSONObject(main),
-                                  let data = try? JSONSerialization.data(withJSONObject: main) else {
-                                return (downloaderID, nil, "下载器返回了无效数据")
-                            }
-                            let worker = Task.detached(priority: .userInitiated) { () -> [TorrentItem]? in
+                            let response = TorrentRawResponse(value: main)
+                            let worker = Task.detached(priority: .userInitiated) {
                                 decodeTorrentItems(
-                                    from: data,
+                                    from: response.value,
                                     downloaderID: downloaderID,
                                     downloaderCategory: downloaderCategory
                                 )
@@ -1169,9 +1207,6 @@ final class DownloadsViewModel: ObservableObject {
                                 operation: { await worker.value },
                                 onCancel: { worker.cancel() }
                             )
-                            guard let items else {
-                                return (downloaderID, nil, "下载器数据解析失败")
-                            }
                             return (downloaderID, items, nil)
                         } catch {
                             return (downloaderID, nil, error.localizedDescription)
@@ -1265,11 +1300,23 @@ final class DownloadsViewModel: ObservableObject {
               let root = cached.value as? [String: Any] else { return }
         let cachedDownloaders = (root["downloaders"] as? [[String: Any]] ?? []).map(DownloaderItem.init)
         let cachedTorrentRows = root["torrents"] as? [[String: Any]] ?? []
-        let cachedTorrents: [TorrentItem] = includesTorrentData
-            ? cachedTorrentRows
-                .filter { focusedDownloaderID == nil || $0.int("downloader_id", "downloader") == focusedDownloaderID }
-                .map(TorrentItem.init)
-            : []
+        let cacheRows = TorrentCacheRowsSnapshot(
+            rows: cachedTorrentRows,
+            focusedDownloaderID: focusedDownloaderID
+        )
+        let cachedTorrents: [TorrentItem]
+        if includesTorrentData {
+            cachedTorrents = await Task.detached(priority: .userInitiated) {
+                cacheRows.rows
+                    .filter {
+                        cacheRows.focusedDownloaderID == nil
+                            || $0.int("downloader_id", "downloader") == cacheRows.focusedDownloaderID
+                    }
+                    .map(TorrentItem.init)
+            }.value
+        } else {
+            cachedTorrents = []
+        }
         let cachedSites: [SiteItem] = includesTorrentData
             ? (root["sites"] as? [[String: Any]] ?? []).map(SiteItem.init)
             : []
@@ -1277,7 +1324,14 @@ final class DownloadsViewModel: ObservableObject {
             ? root["website_configs"] as? [[String: Any]] ?? []
             : []
         guard !cachedDownloaders.isEmpty || !cachedTorrents.isEmpty else { return }
-        downloaders = cachedDownloaders
+        if let focusedDownloader {
+            downloaders = mergingDownloaderConfigurations(
+                [focusedDownloader],
+                previous: cachedDownloaders
+            )
+        } else {
+            downloaders = cachedDownloaders
+        }
         torrents = cachedTorrents
         sites = cachedSites
         websiteConfigs = cachedWebsiteConfigs
@@ -3355,7 +3409,7 @@ struct TorrentListView: View {
         self.initialDownloader = initialDownloader
         _model = StateObject(wrappedValue: DownloadsViewModel(
             includesTorrentData: true,
-            focusedDownloaderID: initialDownloader.id
+            focusedDownloader: initialDownloader
         ))
     }
 
@@ -3493,7 +3547,7 @@ struct TorrentListView: View {
         }
         .task {
             model.downloaderFilter = initialDownloader.id
-            await model.load(appState)
+            await model.prepareCachedData(appState)
             guard !Task.isCancelled else { return }
             model.startWatching(
                 appState,
@@ -3501,6 +3555,7 @@ struct TorrentListView: View {
                 interval: refreshInterval,
                 duration: refreshDuration
             )
+            await model.load(appState)
         }
         .onDisappear { model.stopWatching() }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }
