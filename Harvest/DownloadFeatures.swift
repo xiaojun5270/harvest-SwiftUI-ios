@@ -215,6 +215,48 @@ private func downloaderTotalMetricInt(_ dictionary: [String: Any], category _: S
     downloaderMetricInt(dictionary, keys: downloaderTotalCountKeys)
 }
 
+private struct DownloaderSnapshotCounts: Sendable {
+    let active: Int
+    let paused: Int
+    let total: Int
+}
+
+private struct DownloaderCountResponse: @unchecked Sendable {
+    let value: Any
+}
+
+private func downloaderTorrentRows(_ value: Any, depth: Int = 0) -> [[String: Any]]? {
+    guard depth < 6 else { return nil }
+    if let rows = value as? [[String: Any]] { return rows }
+    guard let dictionary = value as? [String: Any] else { return nil }
+    if let torrents = dictionary["torrents"] {
+        if let rows = torrents as? [[String: Any]] { return rows }
+        if let rows = torrents as? [String: Any] {
+            return rows.values.compactMap { $0 as? [String: Any] }
+        }
+    }
+    for key in ["data", "result"] {
+        guard let nested = dictionary[key],
+              let rows = downloaderTorrentRows(nested, depth: depth + 1) else { continue }
+        return rows
+    }
+    return nil
+}
+
+private func downloaderSnapshotCounts(_ value: Any) -> DownloaderSnapshotCounts? {
+    guard let rows = downloaderTorrentRows(value) else { return nil }
+    var active = 0
+    var paused = 0
+    for row in rows {
+        let state = (row.string("state", "status") ?? "").lowercased()
+        let downloadSpeed = row.double("rateDownload", "dlspeed", "download_speed", "rate_download") ?? 0
+        let uploadSpeed = row.double("rateUpload", "upspeed", "upload_speed", "rate_upload") ?? 0
+        if downloadSpeed > 0 || uploadSpeed > 0 { active += 1 }
+        if state.contains("paused") || state.contains("stopped") || state == "0" { paused += 1 }
+    }
+    return DownloaderSnapshotCounts(active: active, paused: paused, total: rows.count)
+}
+
 private func downloaderMetricInt(
     _ dictionary: [String: Any],
     keys: [String],
@@ -552,7 +594,8 @@ private func torrentStatusCode(_ item: TorrentItem) -> Int {
     case "metadl", "forcedmetadl", "downloading", "forceddl": return 4
     case "queueddl", "stalleddl": return 3
     case "uploading", "forcedup": return 6
-    case "queuedup", "stalledup": return 5
+    case "queuedup": return 5
+    case "stalledup": return 6
     case "checkingdl", "checkingup", "checkingresumedata", "allocating", "moving": return 2
     case "queuedforchecking", "checking": return 1
     case "pauseddl", "pausedup", "stoppeddl", "stoppedup", "error", "missingfiles", "unknown": return 0
@@ -627,7 +670,7 @@ private func torrentStatusLabel(_ value: String, client: String) -> String {
     case "uploading": return "做种中"
     case "pausedup", "stoppedup": return "已暂停"
     case "queuedup": return "排队做种"
-    case "stalledup": return "等待做种"
+    case "stalledup": return "做种"
     case "checkingup": return "校验中"
     case "forcedup": return "强制做种"
     case "allocating": return "分配空间"
@@ -902,7 +945,6 @@ final class DownloadsViewModel: ObservableObject {
     @Published private(set) var refreshDeadline: Date?
     @Published private(set) var cachedAt: Date?
     @Published private(set) var usingCachedData = false
-    @Published private(set) var resolvingCountIDs: Set<Int> = []
     @Published private(set) var speedHistory: [DownloaderSpeedSample] = []
     @Published private var derived = TorrentDerivedState()
     private var speedWatchTask: Task<Void, Never>?
@@ -1733,7 +1775,6 @@ final class DownloadsViewModel: ObservableObject {
         statusBootstrapTask = nil
         countRefreshTask?.cancel()
         countRefreshTask = nil
-        resolvingCountIDs = []
         stopActiveWatching(clearRemaining: true)
     }
 
@@ -1860,7 +1901,6 @@ final class DownloadsViewModel: ObservableObject {
                 model.countRefreshTask = nil
                 return
             }
-            model.resolvingCountIDs = Set(candidates.map(\.id))
             for candidate in candidates {
                 guard !Task.isCancelled else { break }
                 do {
@@ -1869,8 +1909,13 @@ final class DownloadsViewModel: ObservableObject {
                         timeoutInterval: downloaderIsTransmission(candidate.category) ? 15 : 12
                     )
                     guard !Task.isCancelled else { break }
+                    let response = DownloaderCountResponse(value: raw)
+                    let snapshotCounts = await Task.detached(priority: .utility) {
+                        downloaderSnapshotCounts(response.value)
+                    }.value
                     let receivedCounts = model.applyReportedDownloaderStatus(
                         raw,
+                        snapshotCounts: snapshotCounts,
                         downloaderID: candidate.id,
                         appState: appState
                     )
@@ -1885,9 +1930,7 @@ final class DownloadsViewModel: ObservableObject {
                         recordAppLog(.warning, "下载器 \(candidate.id) 实时计数同步失败：\(error.localizedDescription)")
                     }
                 }
-                model.resolvingCountIDs.remove(candidate.id)
             }
-            model.resolvingCountIDs = []
             model.lastCountRefreshAt = Date()
             model.countRefreshTask = nil
         }
@@ -1895,11 +1938,12 @@ final class DownloadsViewModel: ObservableObject {
 
     private func applyReportedDownloaderStatus(
         _ raw: Any,
+        snapshotCounts: DownloaderSnapshotCounts?,
         downloaderID: Int,
         appState: AppState
     ) -> Bool {
-        guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }),
-              let status = reportedDownloaderStatus(raw) else { return false }
+        guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }) else { return false }
+        let status = reportedDownloaderStatus(raw) ?? [:]
         let category = downloaders[index].category
         var hasLiveActive = false
         var hasLivePaused = false
@@ -1915,9 +1959,15 @@ final class DownloadsViewModel: ObservableObject {
                 return true
             }
         }
-        let active: Int? = hasLiveActive ? nil : downloaderActiveMetricInt(status, category: category)
-        let paused: Int? = hasLivePaused ? nil : downloaderPausedMetricInt(status, category: category)
-        let total: Int? = hasLiveTotal ? nil : downloaderTotalMetricInt(status, category: category)
+        let active: Int? = hasLiveActive
+            ? nil
+            : (downloaderActiveMetricInt(status, category: category) ?? snapshotCounts?.active)
+        let paused: Int? = hasLivePaused
+            ? nil
+            : (downloaderPausedMetricInt(status, category: category) ?? snapshotCounts?.paused)
+        let total: Int? = hasLiveTotal
+            ? nil
+            : (downloaderTotalMetricInt(status, category: category) ?? snapshotCounts?.total)
         guard active != nil || paused != nil || total != nil else { return false }
         let current = downloaders[index]
         var values: [String: Any] = [:]
@@ -1964,10 +2014,6 @@ final class DownloadsViewModel: ObservableObject {
             return result
         }
         return nil
-    }
-
-    func isResolvingCounts(_ downloader: DownloaderItem) -> Bool {
-        resolvingCountIDs.contains(downloader.id)
     }
 
     private func stopActiveWatching(clearRemaining: Bool) {
@@ -2551,7 +2597,6 @@ struct DownloadsView: View {
                             ForEach(model.downloaders) { downloader in
                                 DownloaderCard(
                                     item: downloader,
-                                    isResolvingCounts: model.isResolvingCounts(downloader),
                                     onOpenTorrents: { torrentListDownloader = downloader },
                                     onAddTorrent: {
                                         addTorrentDownloaderID = downloader.id
@@ -3131,7 +3176,6 @@ struct DownloaderSelectionSheet: View {
 
 struct DownloaderCard: View {
     let item: DownloaderItem
-    let isResolvingCounts: Bool
     let onOpenTorrents: () -> Void
     let onAddTorrent: () -> Void
     let onEdit: () -> Void
@@ -3174,9 +3218,9 @@ struct DownloaderCard: View {
             }
 
             HStack(spacing: 4) {
-                compactMetric("活跃", value: activeCountText, color: HarvestTheme.green)
+                compactMetric("活跃", value: "\(item.activeTorrentCount)", color: HarvestTheme.green)
                 compactMetric("暂停", value: "\(item.pausedTorrentCount)", color: HarvestTheme.amber)
-                compactMetric("总数", value: totalCountText, color: accentColor)
+                compactMetric("总数", value: "\(item.totalTorrentCount)", color: accentColor)
                 compactMetric(
                     "可用空间",
                     value: item.freeSpace > 0 ? formatBytes(item.freeSpace) : "-",
@@ -3350,16 +3394,6 @@ struct DownloaderCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-    }
-
-    private var activeCountText: String {
-        if item.activeTorrentCount > 0 { return "\(item.activeTorrentCount)" }
-        return isResolvingCounts ? "…" : "0"
-    }
-
-    private var totalCountText: String {
-        if item.totalTorrentCount > 0 { return "\(item.totalTorrentCount)" }
-        return isResolvingCounts ? "…" : "0"
     }
 
     private func limitValue(_ icon: String, value: String, color: Color) -> some View {
@@ -4840,8 +4874,17 @@ private func buildTorrentFileTree(_ files: [[String: Any]]) -> [TorrentFileNode]
         let parts = rawPath.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
         let normalizedParts = parts.isEmpty ? ["未命名文件"] : parts
         let size = max(0, file.double("length", "size") ?? 0)
-        let rawProgress = file.double("progress", "availability", "percentDone", "percent_done") ?? 0
-        let progress = min(1, max(0, rawProgress > 1 ? rawProgress / 100 : rawProgress))
+        let progress: Double
+        if let rawProgress = file.double("progress", "availability", "percentDone", "percent_done") {
+            progress = min(1, max(0, rawProgress > 1 ? rawProgress / 100 : rawProgress))
+        } else if size > 0,
+                  let bytesCompleted = file.double(
+                      "bytesCompleted", "bytes_completed", "completedBytes", "completed_bytes", "downloaded"
+                  ) {
+            progress = min(1, max(0, bytesCompleted / size))
+        } else {
+            progress = 0
+        }
         let priority = file.int("priority", "download_priority")
         let wanted = file.bool("wanted", "is_wanted")
         root.insert(
