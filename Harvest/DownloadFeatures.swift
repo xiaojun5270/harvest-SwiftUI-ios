@@ -375,6 +375,7 @@ struct TorrentItem: Identifiable, @unchecked Sendable {
     var torrentHash: String
     var numericID: Int
     var name: String
+    var subtitle: String
     var downloaderID: Int
     var downloaderCategory: String
     var status: String
@@ -433,6 +434,7 @@ struct TorrentItem: Identifiable, @unchecked Sendable {
             torrentHash = "fallback-\(fallbackID)"
         }
         name = resolvedName
+        subtitle = json.string("subtitle", "sub_title", "description") ?? ""
         downloaderID = resolvedDownloaderID
         id = "\(downloaderID):\(torrentHash)"
         downloaderCategory = json.string("downloader_category", "client_type") ?? "Qb"
@@ -1244,6 +1246,7 @@ final class DownloadsViewModel: ObservableObject {
         [
             "id": item.id,
             "name": item.name,
+            "subtitle": item.subtitle,
             "category": item.category,
             "protocol": item.networkProtocol,
             "host": item.host,
@@ -2116,6 +2119,8 @@ final class DownloadsViewModel: ObservableObject {
                         for item in items {
                             guard !Task.isCancelled else { return nil }
                             hasher.combine(item.id)
+                            hasher.combine(item.name)
+                            hasher.combine(item.subtitle)
                             hasher.combine(item.status)
                             hasher.combine(item.progress)
                             hasher.combine(item.uploadSpeed)
@@ -3288,7 +3293,7 @@ struct TorrentListView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: 7) {
                 torrentSummary
                 torrentStatusStrip
                 if model.isLoading && model.filtered.isEmpty {
@@ -3329,7 +3334,8 @@ struct TorrentListView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(initialDownloader.name)
@@ -3452,13 +3458,13 @@ struct TorrentListView: View {
     }
 
     private var torrentSummary: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("任务概览")
-                        .font(.headline.weight(.semibold))
+                        .font(.system(size: 15, weight: .semibold))
                     Text("当前显示 \(model.filtered.count) / \(downloaderTorrents.count)")
-                        .font(.caption)
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
@@ -3468,19 +3474,19 @@ struct TorrentListView: View {
                     Label(formatSpeed(downloaderTorrents.reduce(0) { $0 + $1.uploadSpeed }), systemImage: "arrow.up")
                         .foregroundStyle(HarvestTheme.green)
                 }
-                .font(.caption.weight(.semibold).monospacedDigit())
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
             }
-            HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 summaryMetric("下载中", value: "\(downloaderTorrents.filter { $0.downloadSpeed > 0 }.count)", color: HarvestTheme.blue)
                 summaryMetric("做种中", value: "\(downloaderTorrents.filter { $0.progress >= 0.999 || $0.uploadSpeed > 0 }.count)", color: HarvestTheme.green)
                 summaryMetric("已暂停", value: "\(downloaderTorrents.filter { torrentStatusCode($0) == 0 }.count)", color: HarvestTheme.amber)
                 summaryMetric("错误", value: "\(downloaderTorrents.filter(\.hasError).count)", color: HarvestTheme.coral)
             }
         }
-        .padding(12)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(9)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 0.75)
         }
     }
@@ -3488,17 +3494,17 @@ struct TorrentListView: View {
     private func summaryMetric(_ label: String, value: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(value)
-                .font(.subheadline.weight(.bold).monospacedDigit())
+                .font(.system(size: 13, weight: .bold).monospacedDigit())
                 .foregroundStyle(color)
             Text(label)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 8, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(color.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var torrentStatusStrip: some View {
@@ -3509,10 +3515,10 @@ struct TorrentListView: View {
                         model.filter = status
                     } label: {
                         Text(status)
-                            .font(.caption.weight(.semibold))
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(model.filter == status ? Color.white : Color.secondary)
-                            .padding(.horizontal, 11)
-                            .frame(height: 30)
+                            .padding(.horizontal, 10)
+                            .frame(height: 27)
                             .background(
                                 model.filter == status ? HarvestTheme.blue : Color.primary.opacity(0.055),
                                 in: Capsule()
@@ -3796,22 +3802,34 @@ struct TorrentRow: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .top) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: 8) {
                 if isSelecting {
                     Button(action: onToggleSelection) {
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.title3).foregroundStyle(isSelected ? HarvestTheme.green : .secondary)
+                            .font(.body).foregroundStyle(isSelected ? HarvestTheme.green : .secondary)
                     }
                     .buttonStyle(.plain)
                 } else {
-                    SymbolBadge(icon: statusIcon, color: progressColor, size: 34)
+                    SymbolBadge(icon: statusIcon, color: progressColor, size: 28)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(2)
-                    Text(metadataLine).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                        .allowsTightening(true)
+                    if !item.subtitle.isEmpty, item.subtitle != item.name {
+                        Text(item.subtitle)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    metadataView
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Menu {
                     Button { Task { await model.control(appState, torrent: item, command: "resume") } } label: { Label("开始", systemImage: "play") }
                     Button { Task { await model.control(appState, torrent: item, command: "pause") } } label: { Label("暂停", systemImage: "pause") }
@@ -3833,14 +3851,19 @@ struct TorrentRow: View {
                         Button(action: onExport) { Label("导出 .torrent", systemImage: "square.and.arrow.up") }
                     }
                     Button(role: .destructive) { confirmDelete = true } label: { Label("删除", systemImage: "trash") }
-                } label: { Image(systemName: "ellipsis").frame(width: 30, height: 30) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
             }
             let safeProgress = normalizedProgress(item.progress)
             TorrentStateProgressBar(
                 progress: safeProgress,
-                colors: progressGradientColors
+                colors: progressGradientColors,
+                height: 5
             )
-            HStack {
+            HStack(spacing: 6) {
                 Text("\(clampedInt(safeProgress * 100))%").fontWeight(.semibold)
                 Text(formatBytes(item.size))
                 Spacer()
@@ -3849,9 +3872,9 @@ struct TorrentRow: View {
                 Label(formatSpeed(item.uploadSpeed), systemImage: "arrow.up")
                     .foregroundStyle(HarvestTheme.green)
             }
-            .font(.caption2.monospacedDigit())
+            .font(.system(size: 9, weight: .medium).monospacedDigit())
             .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 torrentFact("队列", value: item.queuePosition > 0 ? "#\(item.queuePosition)" : "-")
                 torrentFact("种子", value: "\(item.seedCount)")
                 torrentFact("用户", value: "\(item.peerCount)")
@@ -3859,8 +3882,17 @@ struct TorrentRow: View {
                 torrentFact("剩余", value: etaText)
             }
         }
-        .cardSurface()
-        .contentShape(RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(isSelected ? HarvestTheme.green.opacity(0.42) : Color.primary.opacity(0.065), lineWidth: 0.75)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .onTapGesture(perform: onSelect)
         .onLongPressGesture(perform: onToggleSelection)
         .confirmationDialog("确定删除种子「\(item.name)」？", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -3895,15 +3927,29 @@ struct TorrentRow: View {
         return "pause.circle.fill"
     }
 
-    private var metadataLine: String {
-        var values = [item.status]
-        let site = model.siteLabel(for: item)
-        if !site.isEmpty {
-            values.append(privacyMaskedText(site, enabled: appState.privacyMode))
+    private var metadataView: some View {
+        HStack(spacing: 3) {
+            Text(item.status)
+                .foregroundStyle(progressColor)
+            let site = model.siteLabel(for: item)
+            if !site.isEmpty {
+                Text("·").foregroundStyle(.tertiary)
+                Text(privacyMaskedText(site, enabled: appState.privacyMode))
+            }
+            if !item.category.isEmpty {
+                Text("·").foregroundStyle(.tertiary)
+                Text(item.category)
+            }
+            if !item.tags.isEmpty {
+                Text("·").foregroundStyle(.tertiary)
+                Text(item.tags.prefix(2).joined(separator: ", "))
+            }
         }
-        if !item.category.isEmpty { values.append(item.category) }
-        if !item.tags.isEmpty { values.append(item.tags.prefix(2).joined(separator: ", ")) }
-        return values.joined(separator: " · ")
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.68)
+        .allowsTightening(true)
     }
 
     private var etaText: String {
@@ -3919,17 +3965,17 @@ struct TorrentRow: View {
     }
 
     private func torrentFact(_ label: String, value: String) -> some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 0) {
             Text(value)
-                .font(.caption2.weight(.semibold).monospacedDigit())
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
             Text(label)
-                .font(.system(size: 8))
+                .font(.system(size: 7))
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 30)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 22)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private func copyButton(_ title: String, value: String, icon: String) -> some View {
@@ -3945,6 +3991,7 @@ struct TorrentRow: View {
 private struct TorrentStateProgressBar: View {
     let progress: Double
     let colors: [Color]
+    var height: CGFloat = 8
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var fraction: Double { min(max(progress, 0), 1) }
@@ -3965,7 +4012,7 @@ private struct TorrentStateProgressBar: View {
                     .frame(width: proxy.size.width * fraction)
             }
         }
-        .frame(height: 8)
+        .frame(height: height)
         .animation(
             reduceMotion ? nil : .easeInOut(duration: HarvestDesignSystem.Motion.standard),
             value: fraction

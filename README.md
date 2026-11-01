@@ -170,6 +170,8 @@ xcodebuild \
   不再直接显示下划线或连字符组成的英文接口键。
 - 下载器主卡片和选择列表改用 qBittorrent、Transmission 官方项目图标，并提供 1x/2x/3x 原生资源；
   图标来源和许可证记录于 `THIRD_PARTY_NOTICES.md`。
+- 种子列表重新收紧：主标题、副标题、状态元数据使用明确的三级字号，标题保留两行，进度条和底部统计
+  同步缩短，并移除通用卡片的大内边距，提升信息完整度和同屏任务数量。
 - qB 和 Transmission 统一读取语义明确的计数字段 `activeTorrentCount`、`pausedTorrentCount`、
   `torrentCount` 及其下划线/total 兼容写法，不使用容易把其它统计串入卡片的泛化 `active_count`、
   `total_count` 字段。
