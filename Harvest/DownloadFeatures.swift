@@ -752,7 +752,7 @@ private enum DownloaderRefreshDefaults {
     static let enabledKey = "downloads.refresh.enabled"
     static let intervalKey = "downloads.refresh.interval"
     static let durationKey = "downloads.refresh.duration"
-    static let speedInterval = 1
+    static let speedInterval = 2
     static let interval = 5
     static let duration = 5
     static let range = 1...60
@@ -2884,7 +2884,7 @@ struct DownloaderRefreshSettingsSheet: View {
                 Section {
                     Toggle("自动刷新数据", isOn: $enabled)
                 } footer: {
-                    Text("实时速度固定每 1 秒更新；关闭后停止下载器状态和速度连接。")
+                    Text("实时速度固定每 2 秒更新；关闭后停止下载器状态和速度连接。")
                 }
 
                 if enabled {
@@ -2893,7 +2893,7 @@ struct DownloaderRefreshSettingsSheet: View {
                     } header: {
                         Text("种子列表刷新间隔")
                     } footer: {
-                        Text("仅控制种子全量列表，默认 5 秒；实时速度始终每 1 秒更新。")
+                        Text("仅控制种子全量列表，默认 5 秒；实时速度始终每 2 秒更新。")
                     }
                     Section {
                         refreshSlider(value: $duration, unit: "分钟")

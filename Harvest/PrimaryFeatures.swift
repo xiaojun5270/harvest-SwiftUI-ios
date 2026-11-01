@@ -37,8 +37,12 @@ private enum DashboardServerRefreshDefaults {
     static let range = 1...60
 }
 
+private enum DashboardDownloaderSpeedDefaults {
+    static let interval = 2
+}
+
 private enum DashboardChartDefaults {
-    static let height = 260.0
+    static let height = 190.0
     static let heightRange = 120.0...480.0
 }
 
@@ -59,15 +63,15 @@ private enum DashboardMonthlyDefaults {
         "dashboard.data.180",
         "dashboard.data.0"
     ]
-    static let chartHeight = 176.0
+    static let chartHeight = 140.0
 }
 
 private enum DashboardListLayout {
     static let visibleRows = 10
-    static let siteRowHeight: CGFloat = 54
-    static let distributionRowHeight: CGFloat = 46
-    static let incrementRowHeight: CGFloat = 46
-    static let accountRowHeight: CGFloat = 34
+    static let siteRowHeight: CGFloat = 44
+    static let distributionRowHeight: CGFloat = 38
+    static let incrementRowHeight: CGFloat = 38
+    static let accountRowHeight: CGFloat = 30
 }
 
 private func isDashboardRequestCancellation(_ error: Error) -> Bool {
@@ -1027,7 +1031,7 @@ final class DashboardViewModel: ObservableObject {
                     baseURL: appState.baseURL,
                     path: APIPath.downloaderSpeed,
                     token: appState.accessToken,
-                    subscription: ["interval": 5]
+                    subscription: ["interval": DashboardDownloaderSpeedDefaults.interval]
                 )
                 for try await event in stream {
                     guard downloaderSpeedMonitoring, !Task.isCancelled else { return }
@@ -1502,6 +1506,7 @@ private struct DashboardCacheClearSheet: View {
             "dashboard.autoRefresh",
             "dashboard.refreshInterval",
             "dashboard.chartHeight",
+            "dashboard.chartHeight.compact.v1",
             "dashboard.itemLimit",
             DashboardServerRefreshDefaults.autoStartKey,
             DashboardServerRefreshDefaults.intervalKey,
@@ -1558,7 +1563,7 @@ struct DashboardView: View {
     @AppStorage("dashboard.trendDays") private var trendDays = 7
     @AppStorage("dashboard.autoRefresh") private var autoRefresh = true
     @AppStorage("dashboard.refreshInterval") private var refreshInterval = 300
-    @AppStorage("dashboard.chartHeight") private var chartHeight = DashboardChartDefaults.height
+    @AppStorage("dashboard.chartHeight.compact.v1") private var chartHeight = DashboardChartDefaults.height
     @AppStorage("dashboard.serverResource.autoStart") private var serverResourceAutoStart = DashboardServerRefreshDefaults.autoStart
     @AppStorage("dashboard.serverResource.interval") private var serverResourceInterval = DashboardServerRefreshDefaults.interval
     @AppStorage("dashboard.serverResource.duration") private var serverResourceDuration = DashboardServerRefreshDefaults.duration
@@ -1593,7 +1598,7 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 14) {
+            LazyVStack(spacing: 9) {
                 if model.isLoading && !model.usingCachedData && !model.hasDisplayableData {
                     LoadingState()
                 } else {
@@ -1612,44 +1617,35 @@ struct DashboardView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 8) {
                 Spacer()
                 Button { showSettings = true } label: {
-                    FlowingSymbolBadge(
-                        icon: "slider.horizontal.3",
-                        color: HarvestTheme.blue,
-                        size: 34
-                    )
-                        .frame(width: 40, height: 40)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(HarvestTheme.blue, in: Circle())
+                        .overlay { Circle().stroke(Color.white.opacity(0.62), lineWidth: 0.8) }
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(.regularMaterial, in: Circle())
-                .overlay {
-                    Circle()
-                        .stroke(Color.white.opacity(0.58), lineWidth: 0.8)
-                }
                 .shadow(color: Color.black.opacity(0.12), radius: 8, y: 3)
                 .accessibilityLabel("仪表盘卡片设置")
                 Button { showCacheClear = true } label: {
-                    FlowingSymbolBadge(
-                        icon: "trash",
-                        color: HarvestTheme.coral,
-                        size: 34
-                    )
-                        .frame(width: 40, height: 40)
+                    Image(systemName: "trash")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(HarvestTheme.coral, in: Circle())
+                        .overlay { Circle().stroke(Color.white.opacity(0.62), lineWidth: 0.8) }
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(.regularMaterial, in: Circle())
-                .overlay {
-                    Circle()
-                        .stroke(Color.white.opacity(0.58), lineWidth: 0.8)
-                }
                 .shadow(color: Color.black.opacity(0.12), radius: 8, y: 3)
                 .accessibilityLabel("缓存清理")
             }
@@ -2020,6 +2016,23 @@ struct DashboardView: View {
     }
 }
 
+private struct DashboardSectionHeader: View {
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.headline.weight(.bold))
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
 private struct DashboardTrafficTrendView: View {
     let points: [TrendPoint]
     let days: Int
@@ -2038,8 +2051,8 @@ private struct DashboardTrafficTrendView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(
+        VStack(alignment: .leading, spacing: 8) {
+            DashboardSectionHeader(
                 title: "流量趋势",
                 subtitle: selectedPoint.map { $0.date.formatted(date: .abbreviated, time: .omitted) } ?? "最近同步周期"
             )
@@ -2090,7 +2103,7 @@ private struct DashboardTrafficTrendView: View {
             .frame(height: height)
             .accessibilityLabel("最近 \(days) 天上传下载趋势，可拖动查看每日数据")
         }
-        .cardSurface()
+        .harvestCard(.compact)
     }
 }
 
@@ -2105,7 +2118,7 @@ private struct DashboardServerResourcesView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
             header
             hostSummary
             ResourceRow(label: "CPU", value: model.snapshot.cpu, color: HarvestTheme.coral)
@@ -2116,13 +2129,13 @@ private struct DashboardServerResourcesView: View {
             cumulativeTransferSummary
             historyCharts
         }
-        .cardSurface()
+        .harvestCard(.compact)
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("服务器资源").font(.title3.weight(.bold))
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("服务器资源").font(.headline.weight(.bold))
                 if let error = model.serverError {
                     Text(error).font(.caption).foregroundStyle(.secondary)
                 } else if model.serverMonitoring {
@@ -2140,9 +2153,9 @@ private struct DashboardServerResourcesView: View {
                 FlowingSymbolBadge(
                     icon: model.serverMonitoring ? "pause.fill" : "play.fill",
                     color: model.serverMonitoring ? HarvestTheme.amber : HarvestTheme.green,
-                    size: 30
+                    size: 26
                 )
-                .frame(width: 40, height: 40)
+                .frame(width: 32, height: 32)
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -2242,7 +2255,7 @@ private struct DashboardServerResourcesView: View {
             .chartYScale(domain: 0...100)
             .chartXAxis(.hidden)
             .chartYAxis { AxisMarks(position: .leading) }
-            .frame(height: 120)
+            .frame(height: 90)
 
             if peakSpeed > 0 {
                 chartLegend(
@@ -2268,7 +2281,7 @@ private struct DashboardServerResourcesView: View {
                         }
                     }
                 }
-                .frame(height: 120)
+                .frame(height: 90)
             }
         }
     }
@@ -2306,12 +2319,12 @@ private struct DashboardHeroView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: HarvestDesignSystem.Spacing.md) {
-            HStack(alignment: .top, spacing: 12) {
-                FlowingSymbolBadge(icon: "chart.xyaxis.line", color: statusColor, size: 44)
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 9) {
+                FlowingSymbolBadge(icon: "chart.xyaxis.line", color: statusColor, size: 36)
+                VStack(alignment: .leading, spacing: 2) {
                     Text(greeting)
-                        .font(.title2.weight(.bold))
+                        .font(.title3.weight(.bold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                     Text(updatedAt?.formatted(date: .omitted, time: .shortened) ?? "刚刚同步")
@@ -2329,7 +2342,7 @@ private struct DashboardHeroView: View {
                     detail: nil,
                     color: HarvestTheme.green
                 )
-                Divider().frame(height: 46)
+                Divider().frame(height: 38)
                 heroMetric(
                     label: "今日下载",
                     value: dashboardCompactBytes(snapshot.todayDownloaded),
@@ -2348,7 +2361,7 @@ private struct DashboardHeroView: View {
 
             liveSpeedSection
         }
-        .padding(18)
+        .padding(12)
         .background(
             Color(uiColor: .secondarySystemGroupedBackground),
             in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
@@ -2400,7 +2413,7 @@ private struct DashboardHeroView: View {
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .chartLegend(.hidden)
-                .frame(height: 58)
+                .frame(height: 42)
                 .accessibilityLabel("实时上传下载速率趋势")
             } else {
                 HStack(spacing: HarvestDesignSystem.Spacing.xs) {
@@ -2411,8 +2424,8 @@ private struct DashboardHeroView: View {
                 .accessibilityHidden(true)
             }
         }
-        .padding(.horizontal, HarvestDesignSystem.Spacing.sm)
-        .padding(.vertical, HarvestDesignSystem.Spacing.xs)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .background(
             statusColor.opacity(0.045),
             in: RoundedRectangle(cornerRadius: HarvestDesignSystem.Radius.medium, style: .continuous)
@@ -2461,8 +2474,8 @@ private struct DashboardOverviewView: View {
     let onToggleAccountAge: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "数据概览")
+        VStack(alignment: .leading, spacing: 8) {
+            DashboardSectionHeader(title: "数据概览")
 
             HStack(spacing: 0) {
                 overviewPrimaryMetric(
@@ -2471,7 +2484,7 @@ private struct DashboardOverviewView: View {
                     icon: "arrow.up",
                     color: HarvestTheme.green
                 )
-                Divider().frame(height: 46)
+                Divider().frame(height: 38)
                 overviewPrimaryMetric(
                     label: "总下载",
                     value: dashboardCompactBytes(snapshot.downloaded),
@@ -2482,7 +2495,7 @@ private struct DashboardOverviewView: View {
 
             Divider()
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
                 DashboardStatLine(
                     label: "做种数",
                     value: "\(snapshot.seeding)",
@@ -2538,19 +2551,19 @@ private struct DashboardOverviewView: View {
                 .accessibilityLabel("P龄 \(accountAgeText)，\(accountAgeDetail)，点击切换显示方式")
             }
         }
-        .cardSurface()
+        .harvestCard(.compact)
     }
 
     private func overviewPrimaryMetric(label: String, value: String, detail: String? = nil, icon: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 5) {
-                FlowingSymbolBadge(icon: icon, color: color, size: 22)
+                FlowingSymbolBadge(icon: icon, color: color, size: 20)
                 Text(label)
             }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(color)
             Text(value)
-                .font(.title2.weight(.bold).monospacedDigit())
+                .font(.title3.weight(.bold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
             if let detail, !detail.isEmpty {
@@ -2561,7 +2574,7 @@ private struct DashboardOverviewView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 5)
     }
 
 }
@@ -2573,8 +2586,8 @@ private struct DashboardStatLine: View {
     let color: Color
 
     var body: some View {
-        HStack(spacing: 10) {
-            FlowingSymbolBadge(icon: icon, color: color, size: 32)
+        HStack(spacing: 7) {
+            FlowingSymbolBadge(icon: icon, color: color, size: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(label)
                     .font(.caption.weight(.semibold))
@@ -2587,7 +2600,7 @@ private struct DashboardStatLine: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minHeight: 36)
+        .frame(minHeight: 30)
         .accessibilityElement(children: .combine)
     }
 }
@@ -2637,10 +2650,10 @@ private struct DashboardUserInfoView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                FlowingSymbolBadge(icon: "person.crop.circle.fill", color: HarvestTheme.blue, size: 44)
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 9) {
+                FlowingSymbolBadge(icon: "person.crop.circle.fill", color: HarvestTheme.blue, size: 36)
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text("用户信息").font(.title3.weight(.bold))
                         if expiringSoon {
@@ -2666,7 +2679,7 @@ private struct DashboardUserInfoView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("退出登录")
             }
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 6) {
                 DashboardUserMetricView(
                     icon: "person.fill",
                     label: "登录用户",
@@ -2683,7 +2696,7 @@ private struct DashboardUserInfoView: View {
                 )
             }
         }
-        .cardSurface()
+        .harvestCard(.compact)
         .confirmationDialog("确定退出当前账号？", isPresented: $confirmingLogout, titleVisibility: .visible) {
             Button("退出登录", role: .destructive) { onLogout() }
         }
@@ -2698,7 +2711,7 @@ private struct DashboardUserMetricView: View {
     let color: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
                 FlowingSymbolBadge(icon: icon, color: color, size: 22)
                 Text(label)
@@ -2713,10 +2726,10 @@ private struct DashboardUserMetricView: View {
             Text(subtitle)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .lineLimit(3)
-                .frame(maxWidth: .infinity, minHeight: 42, alignment: .topLeading)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .topLeading)
         }
-        .padding(12)
+        .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -2757,15 +2770,15 @@ private struct DashboardDesignationView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                SectionHeader(title: "称号进度", subtitle: "\(siteCount) 个站点接入")
+                DashboardSectionHeader(title: "称号进度", subtitle: "\(siteCount) 个站点接入")
                 Spacer()
-                FlowingSymbolBadge(icon: "medal.fill", color: HarvestTheme.coral, size: 44)
+                FlowingSymbolBadge(icon: "medal.fill", color: HarvestTheme.coral, size: 34)
             }
             HStack(alignment: .firstTextBaseline) {
                 Text(current?.title ?? "无称号")
-                    .font(.title2.weight(.bold))
+                    .font(.title3.weight(.bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                 Spacer()
@@ -2780,7 +2793,7 @@ private struct DashboardDesignationView: View {
             }
             ProgressView(value: progress).tint(HarvestTheme.coral)
         }
-        .cardSurface()
+        .harvestCard(.compact)
     }
 }
 
@@ -2790,16 +2803,16 @@ private struct DashboardQuickActionsView: View {
     private let actions: [DashboardQuickAction] = [.refreshSites, .refreshDashboard, .signSites]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "快捷操作")
+        VStack(alignment: .leading, spacing: 8) {
+            DashboardSectionHeader(title: "快捷操作")
             HStack(alignment: .top, spacing: 8) {
                 ForEach(actions) { action in
                     Button { onAction(action) } label: {
-                        VStack(spacing: 9) {
+                        VStack(spacing: 5) {
                             FlowingSymbolBadge(
                                 icon: action.icon,
                                 color: action.color,
-                                size: 42,
+                                size: 34,
                                 showsProgress: running == action
                             )
                             Text(action.title)
@@ -2821,7 +2834,7 @@ private struct DashboardQuickActionsView: View {
                 }
             }
         }
-        .cardSurface()
+        .harvestCard(.compact)
     }
 }
 
@@ -3077,10 +3090,10 @@ private struct DashboardMonthlyMetricView: View {
     private var total: Double { visiblePoints.reduce(0) { $0 + metric.value($1) } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .lastTextBaseline, spacing: 12) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .lastTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(metric.title).font(.title3.weight(.bold))
+                    Text(metric.title).font(.headline.weight(.bold))
                     Text("近 3 个月对比").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -3093,7 +3106,7 @@ private struct DashboardMonthlyMetricView: View {
                 BarMark(
                     x: .value("周期", dashboardMonthLabel(point.key)),
                     y: .value(metric.title, metric.value(point)),
-                    width: .fixed(38)
+                    width: .fixed(32)
                 )
                 .foregroundStyle(metric.color)
                 .cornerRadius(7)
@@ -3122,7 +3135,7 @@ private struct DashboardMonthlyMetricView: View {
             }
             .frame(height: CGFloat(DashboardMonthlyDefaults.chartHeight))
         }
-        .cardSurface()
+        .harvestCard(.compact)
     }
 }
 
@@ -3316,7 +3329,7 @@ private struct DashboardAccountDistributionView: View {
             color: HarvestTheme.coral,
             itemCount: selectedItems.count,
             rowHeight: DashboardListLayout.accountRowHeight,
-            contentHeightAdjustment: 38
+            contentHeightAdjustment: 32
         ) {
             LazyVStack(spacing: 0) {
                 Picker("账号类型", selection: $selection) {
@@ -3326,7 +3339,7 @@ private struct DashboardAccountDistributionView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 6)
-                .frame(height: 38)
+                .frame(height: 32)
 
                 ForEach(Array(selectedItems.enumerated()), id: \.element.id) { index, item in
                     HStack(spacing: 6) {
@@ -3427,16 +3440,16 @@ private struct DashboardScrollableModule<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 9) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
                 FlowingSymbolBadge(
                     icon: icon,
                     color: color,
-                    size: 30,
+                    size: 24,
                     showsFlowEffect: showsFlowEffect
                 )
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.headline.weight(.bold))
+                    Text(title).font(.subheadline.weight(.bold))
                     Text(subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -3447,8 +3460,8 @@ private struct DashboardScrollableModule<Content: View>: View {
                 Text("\(itemCount) 项")
                     .font(.caption2.weight(.semibold).monospacedDigit())
                     .foregroundStyle(color)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
                     .background(color.opacity(0.10), in: Capsule())
             }
 
@@ -3468,7 +3481,7 @@ private struct DashboardScrollableModule<Content: View>: View {
                 .frame(height: 1)
             }
         }
-        .padding(10)
+        .padding(8)
         .background(
             Color(uiColor: .secondarySystemGroupedBackground),
             in: RoundedRectangle(cornerRadius: HarvestTheme.cardCornerRadius, style: .continuous)
@@ -3484,7 +3497,7 @@ private struct DashboardScrollableModule<Content: View>: View {
                     lineWidth: 0.8
                 )
         }
-        .shadow(color: color.opacity(0.045), radius: 12, x: 0, y: 6)
+        .shadow(color: color.opacity(0.04), radius: 6, x: 0, y: 2)
     }
 }
 
