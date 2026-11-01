@@ -1,6 +1,6 @@
 # iOS Native Migration Audit
 
-Audit date: 2026-10-21
+Audit date: 2026-11-01
 
 Reference: the Flutter implementation in the parent repository and its active
 UI/service call sites.
@@ -18,6 +18,23 @@ routes, inactive feature constants, or alternate trailing-slash forms.
 The confirmed gaps found in the latest comparison have been implemented below.
 An authoritative 1:1 result still requires an Xcode 26 build, API integration
 pass, and device testing against a reachable Harvest server.
+
+## 2026-11-01 原生同步
+
+对比范围：Flutter `b2e4c7f2` → `52f9f7c4`，共 14 个提交；没有改动 Flutter 源码。
+
+| Flutter 新增能力 | iOS 对应实现 |
+| --- | --- |
+| AI/RSS 本机持久化开关，默认关闭 | 设置页功能开关与条件入口，qB RSS 菜单跟随 RSS 开关 |
+| AI 配置、测试、助手、历史日期与分页、用量、诊断 | `AIManagementFeatures.swift`，全部对应后端路径与 HTTP 方法 |
+| 102 个服务预设、8 个快捷指令 | `AIServicePresets.json` 与原生快捷指令；预设数量和名称顺序与 Flutter 校验一致 |
+| RSS 源、标签、方案、订阅、历史 | `RSSManagementFeatures.swift`，原生编辑表单与关联选择 |
+| 源预览/刷新、默认标签、匹配预览、执行、历史推送 | 与 Flutter 相同的 feeds/tags/plans/subscriptions/history/run 接口 |
+| qB RSS 源/文件夹、文章、规则、自动下载、RSS 处理 | `QBRSSManagementFeatures.swift`，含移动、地址更新、已读、重命名和规则匹配接口 |
+| 发布版本与 build | 三个原生目标均为 `2026.1101.01+302` |
+
+静态检查覆盖新增 Swift 语法树、Xcode 对象/源文件/资源引用、预设 JSON、版本与端点清单。
+Windows 无法执行 Xcode/SwiftUI 类型检查；本次没有连接真实后端执行写操作，接口联调和真机验证仍需进行。
 
 ## Latest Corrections
 

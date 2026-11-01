@@ -850,6 +850,7 @@ final class APIClient {
     static let shared = APIClient()
     private let session: URLSession
     private let timeboxedSession: URLSession
+    private let longRequestSession: URLSession
 
     private init() {
         let configuration = URLSessionConfiguration.default
@@ -870,6 +871,14 @@ final class APIClient {
         timeboxedConfiguration.urlCache = nil
         timeboxedConfiguration.httpMaximumConnectionsPerHost = 8
         timeboxedSession = URLSession(configuration: timeboxedConfiguration)
+        let longConfiguration = URLSessionConfiguration.default
+        longConfiguration.timeoutIntervalForRequest = 120
+        longConfiguration.timeoutIntervalForResource = 150
+        longConfiguration.waitsForConnectivity = false
+        longConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        longConfiguration.urlCache = nil
+        longConfiguration.httpMaximumConnectionsPerHost = 4
+        longRequestSession = URLSession(configuration: longConfiguration)
     }
 
     func request(
@@ -914,7 +923,9 @@ final class APIClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        let activeSession = timeoutInterval == nil ? session : timeboxedSession
+        let activeSession: URLSession
+        if let timeoutInterval, timeoutInterval > 20 { activeSession = longRequestSession }
+        else { activeSession = timeoutInterval == nil ? session : timeboxedSession }
         let (data, response) = try await activeSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw APIError(statusCode: 0, message: "服务器未返回有效响应")

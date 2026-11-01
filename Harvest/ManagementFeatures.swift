@@ -935,6 +935,8 @@ private func noticePreviewText(_ content: String) -> String {
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @AppStorage(ManagementFeatureDefaults.aiKey) private var aiEnabled = false
+    @AppStorage(ManagementFeatureDefaults.rssKey) private var rssEnabled = false
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingLogout = false
     @State private var confirmingRestart = false
@@ -980,6 +982,15 @@ struct SettingsView: View {
 
                 Section("自动刷新") {
                     refreshIntervalRow
+                }
+
+                Section("功能开关") {
+                    LazyVGrid(columns: compactColumns, spacing: 8) {
+                        SettingsCompactToggle(title: "AI 管理", icon: "sparkles", color: HarvestTheme.purple, isOn: $aiEnabled)
+                        SettingsCompactToggle(title: "RSS 订阅", icon: "dot.radiowaves.left.and.right", color: HarvestTheme.orange, isOn: $rssEnabled)
+                    }
+                    Text("开启后显示对应管理入口，关闭后不请求该功能数据。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 Section("管理") {
@@ -1215,6 +1226,16 @@ struct SettingsView: View {
 
     private var managementGrid: some View {
         LazyVGrid(columns: compactColumns, spacing: 8) {
+            if aiEnabled {
+                Button { navigationPath.append(SettingsRoute.ai) } label: {
+                    SettingsCompactDestinationLabel(title: "AI 管理", icon: "sparkles", color: HarvestTheme.purple)
+                }
+            }
+            if rssEnabled {
+                Button { navigationPath.append(SettingsRoute.rss) } label: {
+                    SettingsCompactDestinationLabel(title: "RSS 订阅", icon: "dot.radiowaves.left.and.right", color: HarvestTheme.orange)
+                }
+            }
             if appState.profile?.isSuperuser == true {
                 Button { navigationPath.append(SettingsRoute.tasks) } label: {
                     SettingsCompactDestinationLabel(title: "任务中心", icon: "checklist", color: HarvestTheme.blue)
@@ -1291,6 +1312,10 @@ struct SettingsView: View {
     @ViewBuilder
     private func settingsDestination(_ route: SettingsRoute) -> some View {
         switch route {
+        case .ai:
+            if aiEnabled { AIManagementView().environmentObject(appState) }
+        case .rss:
+            if rssEnabled { RSSManagementView().environmentObject(appState) }
         case .tasks:
             TasksView().environmentObject(appState)
         case .backend:
@@ -1347,6 +1372,8 @@ struct SettingsView: View {
 }
 
 private enum SettingsRoute: Hashable {
+    case ai
+    case rss
     case tasks
     case backend
     case notifications

@@ -1,0 +1,773 @@
+[
+  {
+    "name": "OpenAI",
+    "provider": "openai",
+    "baseURL": "https://api.openai.com/v1",
+    "category": "模型厂商",
+    "models": [
+      "gpt-4o-mini",
+      "gpt-4o",
+      "gpt-4.1-mini",
+      "gpt-4.1"
+    ]
+  },
+  {
+    "name": "DeepSeek",
+    "provider": "openai",
+    "baseURL": "https://api.deepseek.com/v1",
+    "category": "模型厂商",
+    "models": [
+      "deepseek-chat",
+      "deepseek-reasoner"
+    ]
+  },
+  {
+    "name": "Kimi（月之暗面）",
+    "provider": "openai",
+    "baseURL": "https://api.moonshot.cn/v1",
+    "category": "模型厂商",
+    "models": [
+      "kimi-latest",
+      "moonshot-v1-8k",
+      "moonshot-v1-32k"
+    ]
+  },
+  {
+    "name": "通义千问（阿里云百炼）",
+    "provider": "openai",
+    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "category": "模型厂商",
+    "models": [
+      "qwen-plus",
+      "qwen-turbo",
+      "qwen-max",
+      "qwen3-max"
+    ]
+  },
+  {
+    "name": "智谱 GLM",
+    "provider": "openai",
+    "baseURL": "https://open.bigmodel.cn/api/paas/v4",
+    "category": "模型厂商",
+    "models": [
+      "glm-4-flash",
+      "glm-4-air",
+      "glm-4-plus"
+    ]
+  },
+  {
+    "name": "MiniMax",
+    "provider": "openai",
+    "baseURL": "https://api.minimax.chat/v1",
+    "category": "模型厂商",
+    "models": [
+      "MiniMax-Text-01",
+      "abab6.5s-chat"
+    ]
+  },
+  {
+    "name": "火山引擎（豆包）",
+    "provider": "openai",
+    "baseURL": "https://ark.cn-beijing.volces.com/api/v3",
+    "category": "模型厂商",
+    "models": [
+      "doubao-pro-32k",
+      "doubao-lite-32k"
+    ]
+  },
+  {
+    "name": "百度千帆",
+    "provider": "openai",
+    "baseURL": "https://qianfan.baidubce.com/v2",
+    "category": "模型厂商",
+    "models": [
+      "ernie-4.0-turbo",
+      "ernie-3.5-8k"
+    ]
+  },
+  {
+    "name": "腾讯云（混元）",
+    "provider": "openai",
+    "baseURL": "https://api.lkeap.cloud.tencent.com/v1",
+    "category": "模型厂商",
+    "models": [
+      "hunyuan-turbos",
+      "hunyuan-large"
+    ]
+  },
+  {
+    "name": "字节 BytePlus",
+    "provider": "openai",
+    "baseURL": "https://ark.ap-southeast.bytepluses.com/api/v3",
+    "category": "模型厂商",
+    "models": [
+      "skylark-pro-32k"
+    ]
+  },
+  {
+    "name": "StepFun（阶跃星辰）",
+    "provider": "openai",
+    "baseURL": "https://api.stepfun.com/v1",
+    "category": "模型厂商",
+    "models": [
+      "step-1-8k",
+      "step-1-32k"
+    ]
+  },
+  {
+    "name": "Xiaomi MiMo",
+    "provider": "openai",
+    "baseURL": "https://api.xiaomimimo.com/v1",
+    "category": "模型厂商",
+    "models": [
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro"
+    ]
+  },
+  {
+    "name": "Xiaomi MiMo Token Plan",
+    "provider": "openai",
+    "baseURL": "https://token-plan-cn.xiaomimimo.com/v1",
+    "category": "模型厂商",
+    "models": [
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro"
+    ]
+  },
+  {
+    "name": "Meta Model API",
+    "provider": "openai",
+    "baseURL": "https://api.meta.ai/v1",
+    "category": "模型厂商",
+    "models": []
+  },
+  {
+    "name": "BaiLing（百炼）",
+    "provider": "openai",
+    "baseURL": "https://api.ant-ling.com/v1",
+    "category": "模型厂商",
+    "models": []
+  },
+  {
+    "name": "Longcat（美团）",
+    "provider": "openai",
+    "baseURL": "https://api.longcat.chat/v1",
+    "category": "模型厂商",
+    "models": []
+  },
+  {
+    "name": "OwendCloud",
+    "provider": "openai",
+    "baseURL": "https://api.owendcloud.com/v1",
+    "category": "模型厂商",
+    "models": []
+  },
+  {
+    "name": "StreamLake（快手）",
+    "provider": "openai",
+    "baseURL": "https://api.streamlake.com/v1",
+    "category": "模型厂商",
+    "models": []
+  },
+  {
+    "name": "iShot",
+    "provider": "openai",
+    "baseURL": "https://api.xyfun.cn/v1",
+    "category": "模型厂商",
+    "models": []
+  },
+  {
+    "name": "88API",
+    "provider": "openai",
+    "baseURL": "https://api.88api.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "9527CODE",
+    "provider": "openai",
+    "baseURL": "https://api.9527.codes/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "A6API",
+    "provider": "openai",
+    "baseURL": "https://api.a6api.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AICodeMirror",
+    "provider": "openai",
+    "baseURL": "https://api.aicodemirror.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AiCodeWith",
+    "provider": "openai",
+    "baseURL": "https://api.aicodewith.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AiCoding",
+    "provider": "openai",
+    "baseURL": "https://api.aicoding.icu/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AIComing",
+    "provider": "openai",
+    "baseURL": "https://api.aicoming.top/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AiGoCode",
+    "provider": "openai",
+    "baseURL": "https://api.aigocode.net/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AiHubMix",
+    "provider": "openai",
+    "baseURL": "https://api.aihubmix.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AllTokens",
+    "provider": "openai",
+    "baseURL": "https://api.alltokens.cc/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Amux",
+    "provider": "openai",
+    "baseURL": "https://api.amux.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "APIKEY.FUN",
+    "provider": "openai",
+    "baseURL": "https://api.apikey.fun/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "APINebula",
+    "provider": "openai",
+    "baseURL": "https://api.apinebula.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "AtlasCloud",
+    "provider": "openai",
+    "baseURL": "https://api.atlascloud.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Azure OpenAI",
+    "provider": "openai",
+    "baseURL": "https://YOUR-RESOURCE.openai.azure.com/openai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Baseten",
+    "provider": "openai",
+    "baseURL": "https://api.baseten.co/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "BotCF",
+    "provider": "openai",
+    "baseURL": "https://api.botcf.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "调元工厂",
+    "provider": "openai",
+    "baseURL": "https://api.tokenfactory.cn/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "CCSub",
+    "provider": "openai",
+    "baseURL": "https://api.ccsub.net/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "CherryIN",
+    "provider": "openai",
+    "baseURL": "https://open.cherryin.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "ClaudeCN",
+    "provider": "openai",
+    "baseURL": "https://api.claudecn.top/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Code0",
+    "provider": "openai",
+    "baseURL": "https://api.code0.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Command Code",
+    "provider": "openai",
+    "baseURL": "https://api.commandcode.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "CrazyRouter",
+    "provider": "openai",
+    "baseURL": "https://api.crazyrouter.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Cubence",
+    "provider": "openai",
+    "baseURL": "https://api.cubence.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "DeepInfra",
+    "provider": "openai",
+    "baseURL": "https://api.deepinfra.com/v1/openai",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "DMXAPI",
+    "provider": "openai",
+    "baseURL": "https://www.dmxapi.cn/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "E-FlowCode",
+    "provider": "openai",
+    "baseURL": "https://api.e-flowcode.cc/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "EveryAPI",
+    "provider": "openai",
+    "baseURL": "https://api.everyapi.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "FennoAI",
+    "provider": "openai",
+    "baseURL": "https://api.fenno.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "FluxA Token Plan",
+    "provider": "openai",
+    "baseURL": "https://api.fluxapay.xyz/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "GrooRoute Pro",
+    "provider": "openai",
+    "baseURL": "https://api.grooroute.pro/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Groq",
+    "provider": "openai",
+    "baseURL": "https://api.groq.com/openai/v1",
+    "category": "第三方平台",
+    "models": [
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant"
+    ]
+  },
+  {
+    "name": "Hugging Face",
+    "provider": "openai",
+    "baseURL": "https://router.huggingface.co/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "IKunCode",
+    "provider": "openai",
+    "baseURL": "https://api.ikuncode.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "JieKou AI",
+    "provider": "openai",
+    "baseURL": "https://api.jiekou.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "模力方舟",
+    "provider": "openai",
+    "baseURL": "https://api.msark.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Micu",
+    "provider": "openai",
+    "baseURL": "https://api.micuapi.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Modelflare",
+    "provider": "openai",
+    "baseURL": "https://api.modelflare.dev/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "ModelScope（魔搭）",
+    "provider": "openai",
+    "baseURL": "https://api-inference.modelscope.cn/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Neblus Token Factory",
+    "provider": "openai",
+    "baseURL": "https://api.nebius.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "NekoCode",
+    "provider": "openai",
+    "baseURL": "https://api.nekoapi.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Novita AI",
+    "provider": "openai",
+    "baseURL": "https://api.novita.ai/v3/openai",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Nvidia",
+    "provider": "openai",
+    "baseURL": "https://integrate.api.nvidia.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "OpenCode",
+    "provider": "openai",
+    "baseURL": "https://api.opencode.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "OpenModel",
+    "provider": "openai",
+    "baseURL": "https://api.openmodel.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "OpenRouter",
+    "provider": "openai",
+    "baseURL": "https://openrouter.ai/api/v1",
+    "category": "第三方平台",
+    "models": [
+      "openai/gpt-4o-mini",
+      "google/gemini-2.0-flash-001"
+    ]
+  },
+  {
+    "name": "PackyCode",
+    "provider": "openai",
+    "baseURL": "https://api.packyapi.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "PatewayAI",
+    "provider": "openai",
+    "baseURL": "https://api.pateway.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "PIPELLM",
+    "provider": "openai",
+    "baseURL": "https://code.pipellm.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "PPIO（派欧云）",
+    "provider": "openai",
+    "baseURL": "https://api.ppinfra.com/v3/openai",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "七牛云",
+    "provider": "openai",
+    "baseURL": "https://api.qiniu.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "RelaxyCode",
+    "provider": "openai",
+    "baseURL": "https://api.relaxycode.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "RightCode",
+    "provider": "openai",
+    "baseURL": "https://api.rightapi.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "RunAPI",
+    "provider": "openai",
+    "baseURL": "https://api.runapi.host/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "RunToken",
+    "provider": "openai",
+    "baseURL": "https://api.runtoken.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "胜算云",
+    "provider": "openai",
+    "baseURL": "https://api.shengsuanyun.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "SiliconFlow（硅基流动）",
+    "provider": "openai",
+    "baseURL": "https://api.siliconflow.cn/v1",
+    "category": "第三方平台",
+    "models": [
+      "Qwen/Qwen2.5-7B-Instruct",
+      "deepseek-ai/DeepSeek-V3"
+    ]
+  },
+  {
+    "name": "SoleAPI",
+    "provider": "openai",
+    "baseURL": "https://api.soleapi.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "SoruxGPT",
+    "provider": "openai",
+    "baseURL": "https://ai.soruxgpt.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Soshow",
+    "provider": "openai",
+    "baseURL": "https://aimarket.so-show.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "SSSAICode",
+    "provider": "openai",
+    "baseURL": "https://api.sssaicodeapi.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "SubRouter",
+    "provider": "openai",
+    "baseURL": "https://api.subrouter.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "SudoCode",
+    "provider": "openai",
+    "baseURL": "https://api.sudocode.chat/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "兔子 API",
+    "provider": "openai",
+    "baseURL": "https://api.tu-zi.com/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "TeamoRouter",
+    "provider": "openai",
+    "baseURL": "https://api.teamorouter.cn/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "TheRouter",
+    "provider": "openai",
+    "baseURL": "https://api.therouter.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "TokenFlux",
+    "provider": "openai",
+    "baseURL": "https://api.tokenflux.dev/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Vercel AI Gateway",
+    "provider": "openai",
+    "baseURL": "https://ai-gateway.vercel.sh/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "xAI（Grok）",
+    "provider": "openai",
+    "baseURL": "https://api.x.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "XycAi",
+    "provider": "openai",
+    "baseURL": "https://api.xycal.us/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "优云智算",
+    "provider": "openai",
+    "baseURL": "https://api.compshare.cn/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "鱼目混珠",
+    "provider": "openai",
+    "baseURL": "https://api.yyks.io/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "ZetaAPI",
+    "provider": "openai",
+    "baseURL": "https://api.zetaapi.ai/v1",
+    "category": "第三方平台",
+    "models": []
+  },
+  {
+    "name": "Cloudflare AI Gateway",
+    "provider": "openai",
+    "baseURL": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT/ai/v1",
+    "category": "云服务商",
+    "models": []
+  },
+  {
+    "name": "DigitalOcean",
+    "provider": "openai",
+    "baseURL": "https://api.digitalocean.com/v1",
+    "category": "云服务商",
+    "models": []
+  },
+  {
+    "name": "Fireworks AI",
+    "provider": "openai",
+    "baseURL": "https://api.fireworks.ai/inference/v1",
+    "category": "云服务商",
+    "models": []
+  },
+  {
+    "name": "Ollama Cloud",
+    "provider": "openai",
+    "baseURL": "https://ollama.com/v1",
+    "category": "云服务商",
+    "models": []
+  },
+  {
+    "name": "SambaNova",
+    "provider": "openai",
+    "baseURL": "https://api.sambanova.ai/v1",
+    "category": "云服务商",
+    "models": []
+  },
+  {
+    "name": "Ollama 本地",
+    "provider": "ollama",
+    "baseURL": "http://localhost:11434",
+    "category": "本地",
+    "models": [
+      "llama3.2",
+      "qwen2.5",
+      "mistral"
+    ]
+  },
+  {
+    "name": "LM Studio",
+    "provider": "openai",
+    "baseURL": "http://localhost:1234/v1",
+    "category": "本地",
+    "models": []
+  },
+  {
+    "name": "llama.cpp",
+    "provider": "openai",
+    "baseURL": "http://localhost:8080/v1",
+    "category": "本地",
+    "models": []
+  },
+  {
+    "name": "自定义地址",
+    "provider": "openai",
+    "baseURL": "",
+    "category": "本地",
+    "models": []
+  }
+]

@@ -8,13 +8,15 @@ CocoaPods 或第三方 UI 框架，最低支持 iOS 17，iOS 26 及以上使用�
 - 工程：`Harvest.xcodeproj`
 - 构建方案：`Harvest`
 - Bundle ID：`com.ptools.harvest`
-- 当前版本：`2026.1021.01 (301)`
+- 当前版本：`2026.1101.01 (302)`
 - 主要入口：`Harvest/HarvestApp.swift`
 - 公共接口、缓存和模型：`Harvest/Core.swift`
 - 主页面：`Harvest/PrimaryFeatures.swift`、`Harvest/SecondaryFeatures.swift`
 - 站点功能：`Harvest/SiteFeatures.swift`
 - 下载器功能：`Harvest/DownloadFeatures.swift`
 - Telegram 签到：`Harvest/TelegramCheckinFeatures.swift`
+- AI 管理：`Harvest/AIManagementFeatures.swift`
+- RSS 订阅与 qB RSS：`Harvest/RSSManagementFeatures.swift`、`Harvest/QBRSSManagementFeatures.swift`
 
 ## 本地开发
 
@@ -127,6 +129,17 @@ xcodebuild \
 - 消息列表、未读角标、全部已读、删除、消息详情和结构化执行结果。
 - 备份与迁移、后端配置、通知机器人、用户中心、授权管理、日志中心和 Safari 扩展设置。
 
+### AI 管理与 RSS 订阅
+
+- 在“设置 → 功能开关”启用 AI 管理或 RSS 订阅后，“管理”区域显示对应入口；两项默认关闭并在本机保存。
+- AI 助手支持 8 条快捷指令、系统提示、按日期读取聊天历史、加载更早记录和失败重试。
+- AI 配置包含与 Flutter 一致的 102 个服务预设、常用模型、密钥、温度、超时、Token 额度和并发数。
+- AI 服务测试、项目状态诊断和每日用量展示共用后端接口；密钥不写入普通本地快照。
+- RSS 支持源、标签、方案、订阅和推送历史的管理，包含源预览/刷新、默认标签导入、匹配预览、单项/全部执行、历史重新推送。
+- RSS 方案支持目标下载器、分类对应路径、RSS 源、大小范围、编码/分辨率/来源/优惠/排除关键字。
+- qB 下载器卡片菜单增加 RSS 管理，支持源/文件夹、文章明细与已读、刷新/移动/删除、自动下载与 RSS 处理开关、规则编辑/重命名/匹配预览。
+- 这些功能需要后端提供相应 AI/RSS 接口；关闭功能开关后不初始化对应页面或后台轮询。
+
 ## 性能与缓存策略
 
 - Dock 切换只改变当前 Tab，不再切换全局动效环境或延迟重算隐藏页面。
@@ -145,6 +158,15 @@ xcodebuild \
 ## 更新记录
 
 后续代码修改完成后继续追加到当前版本，按时间倒序记录实际新增、修复和调整内容。提交哈希、内部调试日志和与原生项目无关的 Flutter 构建细节不写入本节。
+
+### 2026.1101.01 (302) · 2026-11-01
+
+- 同步 Flutter 本次新增的 AI 管理、RSS 订阅与功能开关，保持 SwiftUI 原生实现。
+- AI 补齐助手、聊天历史分页、8 条快捷指令、102 个服务预设、配置保存/恢复、测试、诊断和 Token 用量。
+- RSS 补齐源/标签/方案/订阅/历史管理、匹配预览、执行、重新推送和 qB RSS 管理入口。
+- RSS 方案可选择下载器分类并自动回填目录；qB RSS 可管理源、文件夹、文章和自动下载规则。
+- 新增独立耗时请求通道，AI 推理按 120 秒接收超时执行，避免被通用短请求的 20 秒资源超时截断。
+- App、收割机助手 Safari 扩展与 CookieCloud Safari 扩展版本及构建号统一为 `2026.1101.01 (302)`。
 
 ### 2026.1021.01 (301) · 2026-10-25
 

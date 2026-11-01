@@ -2634,6 +2634,7 @@ struct DownloadsView: View {
     @State private var torrentListDownloader: DownloaderItem?
     @State private var editingDownloader: DownloaderItem?
     @State private var settingsDownloader: DownloaderItem?
+    @State private var rssManagerDownloader: DownloaderItem?
     @State private var speedSettingsDownloader: DownloaderItem?
     @State private var toolPresentation: DownloaderToolPresentation?
     @State private var deletingDownloader: DownloaderItem?
@@ -2674,6 +2675,7 @@ struct DownloadsView: View {
                                     },
                                     onEdit: { editingDownloader = downloader },
                                     onSettings: { settingsDownloader = downloader },
+                                    onRSS: { rssManagerDownloader = downloader },
                                     onSpeedSettings: { speedSettingsDownloader = downloader },
                                     onConnection: {
                                         toolPresentation = DownloaderToolPresentation(downloader: downloader, mode: .connection)
@@ -2778,6 +2780,14 @@ struct DownloadsView: View {
                 .environmentObject(appState)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $rssManagerDownloader) { downloader in
+            NavigationStack {
+                QBRSSManagementView(initialDownloaderID: downloader.id)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { rssManagerDownloader = nil } } }
+            }
+            .environmentObject(appState)
+            .presentationDetents([.large])
         }
         .sheet(item: $speedSettingsDownloader) { downloader in
             DownloaderSettingsSheet(
@@ -3249,11 +3259,13 @@ struct DownloaderSelectionSheet: View {
 }
 
 struct DownloaderCard: View {
+    @AppStorage(ManagementFeatureDefaults.rssKey) private var rssEnabled = false
     let item: DownloaderItem
     let onOpenTorrents: () -> Void
     let onAddTorrent: () -> Void
     let onEdit: () -> Void
     let onSettings: () -> Void
+    let onRSS: () -> Void
     let onSpeedSettings: () -> Void
     let onConnection: () -> Void
     let onCategories: () -> Void
@@ -3387,6 +3399,7 @@ struct DownloaderCard: View {
                 Button(action: onSpeedSettings) { Label("限速设置", systemImage: "gauge.with.dots.needle.67percent") }
                 Button(action: onConnection) { Label("连接检查", systemImage: "network") }
                 if !isTransmission {
+                    if rssEnabled { Button(action: onRSS) { Label("RSS 管理", systemImage: "dot.radiowaves.left.and.right") } }
                     Button(action: onCategories) { Label("分类管理", systemImage: "tag.square") }
                     Button(action: onTags) { Label("标签管理", systemImage: "tag") }
                 }
