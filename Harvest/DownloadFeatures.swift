@@ -1246,7 +1246,6 @@ final class DownloadsViewModel: ObservableObject {
         [
             "id": item.id,
             "name": item.name,
-            "subtitle": item.subtitle,
             "category": item.category,
             "protocol": item.networkProtocol,
             "host": item.host,
@@ -1279,6 +1278,7 @@ final class DownloadsViewModel: ObservableObject {
             "id": item.numericID,
             "hash": item.torrentHash,
             "name": item.name,
+            "subtitle": item.subtitle,
             "downloader_id": item.downloaderID,
             "downloader_category": item.downloaderCategory,
             "state": item.status,
