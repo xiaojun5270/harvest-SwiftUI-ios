@@ -590,16 +590,62 @@ private func torrentHosts(from text: String) -> [String] {
     }
 }
 
+private func decodeTorrentItems(
+    from data: Data,
+    downloaderID: Int,
+    downloaderCategory: String
+) -> [TorrentItem]? {
+    guard let value = try? JSONSerialization.jsonObject(
+        with: data,
+        options: [.fragmentsAllowed]
+    ) else { return nil }
+    let rows = jsonRows(value)
+    var items: [TorrentItem] = []
+    items.reserveCapacity(rows.count)
+    for source in rows {
+        var row = source
+        row["downloader_id"] = downloaderID
+        row["downloader_category"] = downloaderCategory
+        items.append(TorrentItem(row))
+    }
+    return items
+}
+
 private func torrentStatusLabel(_ value: String, client: String) -> String {
-    guard client.lowercased().contains("tr"), let code = Int(value) else { return value }
-    switch code {
-    case 0: return "暂停"
-    case 1, 2: return "校验中"
-    case 3: return "等待下载"
-    case 4: return "下载中"
-    case 5: return "等待做种"
-    case 6: return "做种"
-    default: return value
+    let rawValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if client.lowercased().contains("tr"), let code = Int(rawValue) {
+        switch code {
+        case 0: return "已暂停"
+        case 1, 2: return "校验中"
+        case 3: return "等待下载"
+        case 4: return "下载中"
+        case 5: return "等待做种"
+        case 6: return "做种中"
+        default: return rawValue
+        }
+    }
+
+    switch rawValue.lowercased() {
+    case "error": return "错误"
+    case "missingfiles": return "缺少文件"
+    case "uploading": return "做种中"
+    case "pausedup", "stoppedup": return "已暂停"
+    case "queuedup": return "排队做种"
+    case "stalledup": return "等待做种"
+    case "checkingup": return "校验中"
+    case "forcedup": return "强制做种"
+    case "allocating": return "分配空间"
+    case "downloading": return "下载中"
+    case "metadl": return "获取元数据"
+    case "pauseddl", "stoppeddl": return "已暂停"
+    case "queueddl": return "排队下载"
+    case "stalleddl": return "等待下载"
+    case "checkingdl": return "校验中"
+    case "forceddl": return "强制下载"
+    case "checkingresumedata": return "校验恢复数据"
+    case "moving": return "移动文件"
+    case "unknown", "": return "未知"
+    default: return rawValue
     }
 }
 
@@ -870,13 +916,22 @@ final class DownloadsViewModel: ObservableObject {
     private var siteHostLabels: [(host: String, label: String)] = []
     private var siteKeyLabels: [(key: String, label: String)] = []
     private let sessionCacheKey: String
+    private let fallbackSessionCacheKey: String?
     private let includesTorrentData: Bool
+    private let focusedDownloaderID: Int?
 
-    init(includesTorrentData: Bool = true) {
+    init(includesTorrentData: Bool = true, focusedDownloaderID: Int? = nil) {
         self.includesTorrentData = includesTorrentData
-        self.sessionCacheKey = includesTorrentData
-            ? "downloads.snapshot.v1"
-            : "downloads.downloaders.snapshot.v1"
+        self.focusedDownloaderID = focusedDownloaderID
+        if includesTorrentData, let focusedDownloaderID {
+            self.sessionCacheKey = "downloads.torrents.\(focusedDownloaderID).snapshot.v1"
+            self.fallbackSessionCacheKey = "downloads.snapshot.v1"
+        } else {
+            self.sessionCacheKey = includesTorrentData
+                ? "downloads.snapshot.v1"
+                : "downloads.downloaders.snapshot.v1"
+            self.fallbackSessionCacheKey = nil
+        }
     }
 
     deinit {
@@ -1086,10 +1141,13 @@ final class DownloadsViewModel: ObservableObject {
             var collected: [TorrentItem] = []
             var successfulDownloaderLoads = 0
             var firstDownloaderError: String?
-            let enabledDownloaders = downloaders.filter(\.enabled)
-            let loads = await withTaskGroup(of: (Int, Data?, String?).self) { group in
+            let enabledDownloaders = downloaders.filter {
+                $0.enabled && (focusedDownloaderID == nil || $0.id == focusedDownloaderID)
+            }
+            let loads = await withTaskGroup(of: (Int, [TorrentItem]?, String?).self) { group in
                 for downloader in enabledDownloaders {
                     let downloaderID = downloader.id
+                    let downloaderCategory = downloader.category
                     group.addTask {
                         do {
                             let main = try await appState.api(
@@ -1100,44 +1158,47 @@ final class DownloadsViewModel: ObservableObject {
                                   let data = try? JSONSerialization.data(withJSONObject: main) else {
                                 return (downloaderID, nil, "下载器返回了无效数据")
                             }
-                            return (downloaderID, data, nil)
+                            let worker = Task.detached(priority: .userInitiated) { () -> [TorrentItem]? in
+                                decodeTorrentItems(
+                                    from: data,
+                                    downloaderID: downloaderID,
+                                    downloaderCategory: downloaderCategory
+                                )
+                            }
+                            let items = await withTaskCancellationHandler(
+                                operation: { await worker.value },
+                                onCancel: { worker.cancel() }
+                            )
+                            guard let items else {
+                                return (downloaderID, nil, "下载器数据解析失败")
+                            }
+                            return (downloaderID, items, nil)
                         } catch {
                             return (downloaderID, nil, error.localizedDescription)
                         }
                     }
                 }
-                var values: [(Int, Data?, String?)] = []
+                var values: [(Int, [TorrentItem]?, String?)] = []
                 for await value in group { values.append(value) }
                 return values
             }
-            let downloaderByID = Dictionary(
-                enabledDownloaders.map { ($0.id, $0) },
-                uniquingKeysWith: { current, _ in current }
-            )
-            for (downloaderID, data, errorMessage) in loads {
-                guard let downloader = downloaderByID[downloaderID] else { continue }
-                if let data,
-                   let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            for (downloaderID, items, errorMessage) in loads {
+                if let items {
                     successfulDownloaderLoads += 1
-                    collected.append(contentsOf: jsonRows(value).map {
-                        var row = $0
-                        row["downloader_id"] = downloader.id
-                        row["downloader_category"] = downloader.category
-                        return TorrentItem(row)
-                    })
+                    collected.append(contentsOf: items)
                 } else {
                     firstDownloaderError = firstDownloaderError ?? errorMessage
-                    collected.append(contentsOf: previousTorrents.filter { $0.downloaderID == downloader.id })
+                    collected.append(contentsOf: previousTorrents.filter { $0.downloaderID == downloaderID })
                 }
             }
             torrents = collected
             if successfulDownloaderLoads == 0,
-               downloaders.contains(where: \.enabled),
+               !enabledDownloaders.isEmpty,
                let firstDownloaderError {
                 if previousTorrents.isEmpty { appState.presentedError = firstDownloaderError }
                 else { recordAppLog(.warning, "下载器实时数据不可用，继续显示缓存：\(firstDownloaderError)") }
             }
-            if sites.isEmpty || usingCachedData {
+            if sites.isEmpty {
                 do {
                     let siteRaw = try await appState.api(APIPath.sites, timeoutInterval: 12)
                     sites = jsonRows(siteRaw).map(SiteItem.init)
@@ -1147,7 +1208,7 @@ final class DownloadsViewModel: ObservableObject {
                     }
                 }
             }
-            if websiteConfigs.isEmpty || usingCachedData {
+            if websiteConfigs.isEmpty {
                 do {
                     websiteConfigs = jsonRows(
                         try await appState.api(APIPath.websiteList, timeoutInterval: 12)
@@ -1194,12 +1255,20 @@ final class DownloadsViewModel: ObservableObject {
     private func restoreCacheIfNeeded(_ appState: AppState) async {
         guard !restoredCache else { return }
         restoredCache = true
-        let cached = await appState.readSessionCache(sessionCacheKey)
+        var cached = await appState.readSessionCache(sessionCacheKey)
+        var usedFallbackCache = false
+        if cached == nil, let fallbackSessionCacheKey {
+            cached = await appState.readSessionCache(fallbackSessionCacheKey)
+            usedFallbackCache = cached != nil
+        }
         guard let cached,
               let root = cached.value as? [String: Any] else { return }
         let cachedDownloaders = (root["downloaders"] as? [[String: Any]] ?? []).map(DownloaderItem.init)
+        let cachedTorrentRows = root["torrents"] as? [[String: Any]] ?? []
         let cachedTorrents: [TorrentItem] = includesTorrentData
-            ? (root["torrents"] as? [[String: Any]] ?? []).map(TorrentItem.init)
+            ? cachedTorrentRows
+                .filter { focusedDownloaderID == nil || $0.int("downloader_id", "downloader") == focusedDownloaderID }
+                .map(TorrentItem.init)
             : []
         let cachedSites: [SiteItem] = includesTorrentData
             ? (root["sites"] as? [[String: Any]] ?? []).map(SiteItem.init)
@@ -1215,6 +1284,7 @@ final class DownloadsViewModel: ObservableObject {
         cachedAt = cached.cachedAt
         usingCachedData = true
         isLoading = false
+        if usedFallbackCache { await persistCache(appState) }
     }
 
     private func persistCache(_ appState: AppState) async {
@@ -1724,6 +1794,8 @@ final class DownloadsViewModel: ObservableObject {
             // only when that stream does not expose the required fields.
             let candidates = model.downloaders.filter { downloader in
                 guard downloader.enabled else { return false }
+                guard model.focusedDownloaderID == nil
+                        || downloader.id == model.focusedDownloaderID else { return false }
                 guard let live = model.liveStatus(for: downloader) else { return true }
                 let liveStatus = model.reportedDownloaderStatus(live) ?? live
                 return downloaderActiveMetricInt(liveStatus, category: downloader.category) == nil
@@ -1878,7 +1950,9 @@ final class DownloadsViewModel: ObservableObject {
             return
         }
 
-        let enabledDownloaders = downloaders.filter(\.enabled)
+        let enabledDownloaders = downloaders.filter {
+            $0.enabled && (focusedDownloaderID == nil || $0.id == focusedDownloaderID)
+        }
         let enabledIDs = Set(enabledDownloaders.map(\.id))
         for id in Set(downloaderWatchTasks.keys).subtracting(enabledIDs) {
             downloaderWatchTasks[id]?.cancel()
@@ -3264,7 +3338,7 @@ private struct ManagedDownloaderCategory: Identifiable {
 
 struct TorrentListView: View {
     @EnvironmentObject private var appState: AppState
-    @StateObject private var model = DownloadsViewModel(includesTorrentData: true)
+    @StateObject private var model: DownloadsViewModel
     @AppStorage(DownloaderRefreshDefaults.enabledKey) private var refreshEnabled = true
     @AppStorage(DownloaderRefreshDefaults.intervalKey) private var refreshInterval = DownloaderRefreshDefaults.interval
     @AppStorage(DownloaderRefreshDefaults.durationKey) private var refreshDuration = DownloaderRefreshDefaults.duration
@@ -3276,6 +3350,14 @@ struct TorrentListView: View {
     @State private var showFilters = false
     @State private var showAddTorrent = false
     @State private var exportedTorrent: ExportedTorrentFile?
+
+    init(initialDownloader: DownloaderItem) {
+        self.initialDownloader = initialDownloader
+        _model = StateObject(wrappedValue: DownloadsViewModel(
+            includesTorrentData: true,
+            focusedDownloaderID: initialDownloader.id
+        ))
+    }
 
     private var selectedTorrents: [TorrentItem] {
         model.filtered.filter { selectedIDs.contains($0.id) }
@@ -3411,13 +3493,14 @@ struct TorrentListView: View {
         }
         .task {
             model.downloaderFilter = initialDownloader.id
+            await model.load(appState)
+            guard !Task.isCancelled else { return }
             model.startWatching(
                 appState,
                 enabled: refreshEnabled,
                 interval: refreshInterval,
                 duration: refreshDuration
             )
-            await model.load(appState)
         }
         .onDisappear { model.stopWatching() }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }
@@ -3964,7 +4047,8 @@ struct TorrentRow: View {
             let site = model.siteLabel(for: item)
             if !site.isEmpty {
                 Text("·").foregroundStyle(.tertiary)
-                Text(privacyMaskedText(site, enabled: appState.privacyMode))
+                Text(site)
+                    .layoutPriority(2)
             }
             if !item.category.isEmpty {
                 Text("·").foregroundStyle(.tertiary)
@@ -3973,6 +4057,7 @@ struct TorrentRow: View {
             if !item.tags.isEmpty {
                 Text("·").foregroundStyle(.tertiary)
                 Text(item.tags.prefix(2).joined(separator: ", "))
+                    .layoutPriority(-1)
             }
         }
         .font(.system(size: 9, weight: .medium))

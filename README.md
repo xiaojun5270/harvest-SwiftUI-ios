@@ -148,6 +148,8 @@ xcodebuild \
 
 ### 2026.1021.01 (301) · 2026-10-25
 
+- 种子列表补齐 qBittorrent 与 Transmission 状态中文映射，来源站点完整显示；单个下载器页面改为
+  独立缓存、定向请求和定向实时监听，不再进入页面时加载全部下载器种子。
 - 修复 qB 下载器实时状态匹配失败导致活跃数、总数长期停留在首次值：支持下载器 ID、
   `name-id-category` 和 `wsKey`，实时帧先解包 `data/info/status/server_state`。
 - 修复 qB 总数/活跃数缺失和 Transmission 活跃数被覆盖：计数优先采用速度 WebSocket 的实时字段，
