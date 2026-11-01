@@ -68,10 +68,17 @@ private enum DashboardMonthlyDefaults {
 
 private enum DashboardListLayout {
     static let visibleRows = 10
-    static let siteRowHeight: CGFloat = 44
+    static let siteRowHeight: CGFloat = 46
     static let distributionRowHeight: CGFloat = 38
     static let incrementRowHeight: CGFloat = 38
     static let accountRowHeight: CGFloat = 30
+}
+
+private enum DashboardProgressPalette {
+    static let upload = HarvestDesignSystem.Palette.siteActivity
+    static let download = HarvestDesignSystem.Palette.siteTransfer
+    static let seed = HarvestDesignSystem.Palette.siteValue
+    static let count = HarvestDesignSystem.Palette.siteSecondary
 }
 
 private func isDashboardRequestCancellation(_ error: Error) -> Bool {
@@ -2417,10 +2424,10 @@ private struct DashboardHeroView: View {
                 .accessibilityLabel("实时上传下载速率趋势")
             } else {
                 HStack(spacing: HarvestDesignSystem.Spacing.xs) {
-                    Capsule().fill(HarvestTheme.blue.opacity(0.32))
-                    Capsule().fill(HarvestTheme.green.opacity(0.32))
+                    Capsule().fill(DashboardProgressPalette.download.opacity(0.24))
+                    Capsule().fill(DashboardProgressPalette.upload.opacity(0.24))
                 }
-                .frame(height: 7)
+                .frame(height: 3)
                 .accessibilityHidden(true)
             }
         }
@@ -2791,7 +2798,9 @@ private struct DashboardDesignationView: View {
                     Text("已达到最高等级").font(.caption).foregroundStyle(HarvestTheme.green)
                 }
             }
-            ProgressView(value: progress).tint(HarvestTheme.coral)
+            ProgressView(value: progress)
+                .tint(DashboardProgressPalette.count.opacity(0.78))
+                .frame(height: 3)
         }
         .harvestCard(.compact)
     }
@@ -2853,7 +2862,7 @@ private struct DashboardSiteStatusView: View {
     var body: some View {
         DashboardScrollableModule(
             title: "站点状态",
-            subtitle: "累计上传 / 下载对比",
+            subtitle: "累计传输对比",
             icon: "globe.asia.australia.fill",
             color: HarvestTheme.blue,
             itemCount: items.count,
@@ -2862,86 +2871,79 @@ private struct DashboardSiteStatusView: View {
         ) {
             LazyVStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
                             dashboardRank(index + 1, color: HarvestTheme.blue, compact: true)
                             Text(privacyMaskedText(item.name, enabled: privacy))
-                                .font(.caption.weight(.semibold))
+                                .font(.system(size: 11, weight: .semibold))
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             if item.published > 0 {
-                                HStack(spacing: 4) {
-                                    FlowingSymbolBadge(
-                                        icon: "paperplane",
-                                        color: HarvestTheme.coral,
-                                        size: 18,
-                                        showsFlowEffect: false
-                                    )
-                                    Text(formatCompactNumber(item.published))
-                                }
-                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                Label(formatCompactNumber(item.published), systemImage: "paperplane.fill")
+                                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
                                     .foregroundStyle(HarvestTheme.coral)
-                                    .padding(.horizontal, 6)
+                                    .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
-                                    .background(HarvestTheme.coral.opacity(0.10), in: Capsule())
+                                    .background(HarvestTheme.coral.opacity(0.09), in: Capsule())
                                     .fixedSize(horizontal: true, vertical: false)
                             }
                         }
-                        HStack(spacing: 8) {
-                            dashboardCapacityMetric(
+                        HStack(spacing: 7) {
+                            siteTransferMetric(
+                                label: "上传",
                                 item.uploaded,
                                 maximum: maximumUpload,
                                 icon: "arrow.up",
-                                color: HarvestTheme.green,
-                                emphasizesLeadingEdge: false
+                                color: DashboardProgressPalette.upload
                             )
-                            dashboardCapacityMetric(
+                            Divider().frame(height: 16)
+                            siteTransferMetric(
+                                label: "下载",
                                 item.downloaded,
                                 maximum: maximumDownload,
                                 icon: "arrow.down",
-                                color: HarvestTheme.blue,
-                                emphasizesLeadingEdge: false
+                                color: DashboardProgressPalette.download
                             )
                         }
-                        .padding(.leading, 20)
+                        .padding(.leading, 14)
                     }
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, 6)
                     .frame(height: DashboardListLayout.siteRowHeight)
                     .overlay(alignment: .bottom) {
-                        if index < items.count - 1 { Divider().padding(.leading, 10) }
+                        if index < items.count - 1 { Divider().padding(.leading, 14) }
                     }
                 }
             }
         }
     }
 
-    private func dashboardCapacityMetric(
+    private func siteTransferMetric(
+        label: String,
         _ value: Double,
         maximum: Double,
         icon: String,
-        color: Color,
-        emphasizesLeadingEdge: Bool
+        color: Color
     ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                FlowingSymbolBadge(
-                    icon: icon,
-                    color: color,
-                    size: 18,
-                    showsFlowEffect: false
-                )
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 10)
+                Text(label)
+                    .foregroundStyle(.secondary)
                 Text(dashboardCompactBytes(value))
+                    .foregroundStyle(color)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
-                .font(.caption2.weight(.medium).monospacedDigit())
-                .foregroundStyle(color)
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
                 .lineLimit(1)
-                .minimumScaleFactor(0.68)
+                .minimumScaleFactor(0.62)
             DashboardMetricBar(
                 value: value,
                 maximum: maximum,
                 color: color,
-                height: 5,
-                emphasizesLeadingEdge: emphasizesLeadingEdge
+                height: 3,
+                emphasizesLeadingEdge: false
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2984,22 +2986,22 @@ private struct DashboardIncrementRankingView: View {
                                 .font(.caption.weight(.semibold))
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            incrementMetric(item.uploaded, icon: "arrow.up", color: HarvestTheme.green)
-                            incrementMetric(item.downloaded, icon: "arrow.down", color: HarvestTheme.blue)
+                            incrementMetric(item.uploaded, icon: "arrow.up", color: DashboardProgressPalette.upload)
+                            incrementMetric(item.downloaded, icon: "arrow.down", color: DashboardProgressPalette.download)
                         }
                         HStack(spacing: 6) {
                             DashboardMetricBar(
                                 value: item.uploaded,
                                 maximum: maximumUpload,
-                                color: HarvestTheme.green,
-                                height: 5,
+                                color: DashboardProgressPalette.upload,
+                                height: 3,
                                 emphasizesLeadingEdge: false
                             )
                             DashboardMetricBar(
                                 value: item.downloaded,
                                 maximum: maximumDownload,
-                                color: HarvestTheme.blue,
-                                height: 5,
+                                color: DashboardProgressPalette.download,
+                                height: 3,
                                 emphasizesLeadingEdge: false
                             )
                         }
@@ -3145,10 +3147,10 @@ private enum DashboardDistributionMetric {
 
     var color: Color {
         switch self {
-        case .count: HarvestTheme.coral
-        case .bytes(.upload): HarvestTheme.green
-        case .bytes(.download): HarvestTheme.blue
-        case .bytes(.seed): HarvestTheme.amber
+        case .count: DashboardProgressPalette.count
+        case .bytes(.upload): DashboardProgressPalette.upload
+        case .bytes(.download): DashboardProgressPalette.download
+        case .bytes(.seed): DashboardProgressPalette.seed
         }
     }
 
@@ -3232,7 +3234,7 @@ private struct DistributionView: View {
                             value: item.value,
                             maximum: maximum,
                             color: metric.color,
-                            height: 7,
+                            height: 3,
                             emphasizesLeadingEdge: false
                         )
                         .padding(.leading, 20)
@@ -3254,7 +3256,7 @@ private struct DashboardMetricBar: View {
     let value: Double
     let maximum: Double
     let color: Color
-    var height: CGFloat = 6
+    var height: CGFloat = 3
     var emphasizesLeadingEdge = false
 
     private var progress: Double {
@@ -3267,21 +3269,21 @@ private struct DashboardMetricBar: View {
             let filledWidth = proxy.size.width * progress
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.primary.opacity(0.065))
+                    .fill(Color.primary.opacity(0.045))
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(
                             LinearGradient(
-                                colors: [color.opacity(0.48), color],
+                                colors: [color.opacity(0.30), color.opacity(0.74)],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
                     Capsule()
-                        .stroke(color.opacity(0.34), lineWidth: 0.6)
+                        .stroke(color.opacity(0.20), lineWidth: 0.4)
                     if reduceMotion {
                         LinearGradient(
-                            colors: [.clear, Color.white.opacity(0.72)],
+                            colors: [.clear, Color.white.opacity(0.38)],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
@@ -3292,8 +3294,8 @@ private struct DashboardMetricBar: View {
                     .frame(width: filledWidth)
                     .clipShape(Capsule())
                     .shadow(
-                        color: emphasizesLeadingEdge ? color.opacity(0.24) : .clear,
-                        radius: 4,
+                        color: emphasizesLeadingEdge ? color.opacity(0.16) : .clear,
+                        radius: 2,
                         x: 0,
                         y: 1
                     )
@@ -4002,7 +4004,9 @@ private struct DashboardShareContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack { Text(privacyMaskedText(item.name, enabled: privacy)).lineLimit(1); Spacer(); Text(metric.format(item.value)).monospacedDigit() }
                         .font(.caption)
-                    ProgressView(value: item.value, total: maximum).tint(metric.color)
+                    ProgressView(value: item.value, total: maximum)
+                        .tint(metric.color.opacity(0.74))
+                        .frame(height: 3)
                 }
             }
         }
@@ -4128,9 +4132,11 @@ struct ResourceRow: View {
 
     var body: some View {
         let safeValue = value.isFinite ? min(max(value, 0), 100) : 0
-        VStack(spacing: 7) {
+        VStack(spacing: 4) {
             HStack { Text(label).font(.subheadline.weight(.semibold)); Spacer(); Text("\(clampedInt(safeValue))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-            ProgressView(value: safeValue, total: 100).tint(color)
+            ProgressView(value: safeValue, total: 100)
+                .tint(color.opacity(0.74))
+                .frame(height: 3)
         }
     }
 }
