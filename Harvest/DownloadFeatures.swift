@@ -3803,84 +3803,10 @@ struct TorrentRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .top, spacing: 8) {
-                if isSelecting {
-                    Button(action: onToggleSelection) {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.body).foregroundStyle(isSelected ? HarvestTheme.green : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    SymbolBadge(icon: statusIcon, color: progressColor, size: 28)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.82)
-                        .allowsTightening(true)
-                    if !item.subtitle.isEmpty, item.subtitle != item.name {
-                        Text(item.subtitle)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
-                    metadataView
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Menu {
-                    Button { Task { await model.control(appState, torrent: item, command: "resume") } } label: { Label("开始", systemImage: "play") }
-                    Button { Task { await model.control(appState, torrent: item, command: "pause") } } label: { Label("暂停", systemImage: "pause") }
-                    Button {
-                        Task { _ = await model.execute(appState, torrents: [item], qbCommand: "recheck", trCommand: "verify_torrent") }
-                    } label: { Label("重新校验", systemImage: "checkmark.shield") }
-                    Button {
-                        Task { _ = await model.execute(appState, torrents: [item], qbCommand: "reannounce", trCommand: "reannounce_torrent") }
-                    } label: { Label("重新汇报", systemImage: "megaphone") }
-                    Button(action: onAdvanced) { Label("高级操作", systemImage: "slider.horizontal.3") }
-                    Menu {
-                        copyButton("名称", value: item.name, icon: "textformat")
-                        copyButton("Hash", value: item.torrentHash, icon: "number")
-                        copyButton("磁力链接", value: item.copyMagnet, icon: "link")
-                        copyButton("Tracker", value: item.trackerURLs.joined(separator: "\n"), icon: "network")
-                        copyButton("保存路径", value: item.savePath, icon: "folder")
-                    } label: { Label("复制", systemImage: "doc.on.doc") }
-                    if !item.downloaderCategory.lowercased().contains("tr") {
-                        Button(action: onExport) { Label("导出 .torrent", systemImage: "square.and.arrow.up") }
-                    }
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("删除", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                }
-            }
-            let safeProgress = normalizedProgress(item.progress)
-            TorrentStateProgressBar(
-                progress: safeProgress,
-                colors: progressGradientColors,
-                height: 5
-            )
-            HStack(spacing: 6) {
-                Text("\(clampedInt(safeProgress * 100))%").fontWeight(.semibold)
-                Text(formatBytes(item.size))
-                Spacer()
-                Label(formatSpeed(item.downloadSpeed), systemImage: "arrow.down")
-                    .foregroundStyle(HarvestTheme.blue)
-                Label(formatSpeed(item.uploadSpeed), systemImage: "arrow.up")
-                    .foregroundStyle(HarvestTheme.green)
-            }
-            .font(.system(size: 9, weight: .medium).monospacedDigit())
-            .foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                torrentFact("队列", value: item.queuePosition > 0 ? "#\(item.queuePosition)" : "-")
-                torrentFact("种子", value: "\(item.seedCount)")
-                torrentFact("用户", value: "\(item.peerCount)")
-                torrentFact("分享率", value: String(format: "%.2f", item.ratio))
-                torrentFact("剩余", value: etaText)
-            }
+            torrentHeader
+            TorrentStateProgressBar(progress: safeProgress, colors: progressGradientColors, height: 5)
+            transferSummary
+            torrentFacts
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -3905,6 +3831,110 @@ struct TorrentRow: View {
             Button("取消", role: .cancel) { }
         } message: {
             Text("若相同内容路径仍有其他做种任务，数据文件会自动保留。")
+        }
+    }
+
+    private var safeProgress: Double { normalizedProgress(item.progress) }
+
+    private var torrentHeader: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.body)
+                        .foregroundStyle(isSelected ? HarvestTheme.green : Color.secondary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                SymbolBadge(icon: statusIcon, color: progressColor, size: 28)
+            }
+            torrentTitleBlock
+            torrentActionsMenu
+        }
+    }
+
+    private var torrentTitleBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(item.name)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+                .allowsTightening(true)
+            if !item.subtitle.isEmpty, item.subtitle != item.name {
+                Text(item.subtitle)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            metadataView
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var torrentActionsMenu: some View {
+        Menu {
+            Button { Task { await model.control(appState, torrent: item, command: "resume") } } label: {
+                Label("开始", systemImage: "play")
+            }
+            Button { Task { await model.control(appState, torrent: item, command: "pause") } } label: {
+                Label("暂停", systemImage: "pause")
+            }
+            Button {
+                Task { _ = await model.execute(appState, torrents: [item], qbCommand: "recheck", trCommand: "verify_torrent") }
+            } label: {
+                Label("重新校验", systemImage: "checkmark.shield")
+            }
+            Button {
+                Task { _ = await model.execute(appState, torrents: [item], qbCommand: "reannounce", trCommand: "reannounce_torrent") }
+            } label: {
+                Label("重新汇报", systemImage: "megaphone")
+            }
+            Button(action: onAdvanced) { Label("高级操作", systemImage: "slider.horizontal.3") }
+            Menu {
+                copyButton("名称", value: item.name, icon: "textformat")
+                copyButton("Hash", value: item.torrentHash, icon: "number")
+                copyButton("磁力链接", value: item.copyMagnet, icon: "link")
+                copyButton("Tracker", value: item.trackerURLs.joined(separator: "\n"), icon: "network")
+                copyButton("保存路径", value: item.savePath, icon: "folder")
+            } label: {
+                Label("复制", systemImage: "doc.on.doc")
+            }
+            if !item.downloaderCategory.lowercased().contains("tr") {
+                Button(action: onExport) { Label("导出 .torrent", systemImage: "square.and.arrow.up") }
+            }
+            Button(role: .destructive) { confirmDelete = true } label: {
+                Label("删除", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 24, height: 24)
+        }
+    }
+
+    private var transferSummary: some View {
+        HStack(spacing: 6) {
+            Text("\(clampedInt(safeProgress * 100))%").fontWeight(.semibold)
+            Text(formatBytes(item.size))
+            Spacer()
+            Label(formatSpeed(item.downloadSpeed), systemImage: "arrow.down")
+                .foregroundStyle(HarvestTheme.blue)
+            Label(formatSpeed(item.uploadSpeed), systemImage: "arrow.up")
+                .foregroundStyle(HarvestTheme.green)
+        }
+        .font(.system(size: 9, weight: .medium).monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+
+    private var torrentFacts: some View {
+        HStack(spacing: 4) {
+            torrentFact("队列", value: item.queuePosition > 0 ? "#\(item.queuePosition)" : "-")
+            torrentFact("种子", value: "\(item.seedCount)")
+            torrentFact("用户", value: "\(item.peerCount)")
+            torrentFact("分享率", value: String(format: "%.2f", item.ratio))
+            torrentFact("剩余", value: etaText)
         }
     }
 
@@ -5818,7 +5848,7 @@ private func equalsAny(_ value: String, _ candidates: [String]) -> Bool {
     candidates.contains(value)
 }
 
-private let downloaderPreferenceLabels: [String: String] = [
+private let downloaderDownloadPreferenceLabels: [String: String] = [
     // 下载与文件
     "save_path": "默认保存路径", "download-dir": "默认保存目录", "temp_path": "临时目录",
     "temp_path_enabled": "启用临时目录", "incomplete-dir": "未完成目录", "incomplete-dir-enabled": "启用未完成目录",
@@ -5834,8 +5864,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "export_dir_fin": "完成后复制 .torrent 文件到目录", "start-added-torrents": "自动启动新种子",
     "trash-original-torrent-files": "删除原始种子文件", "scan_dirs": "自动监控目录",
     "excluded_file_names": "排除的文件名", "excluded_file_names_enabled": "启用文件名排除规则",
+]
 
-    // 速度与调度
+private let downloaderSpeedPreferenceLabels: [String: String] = [
     "dl_limit": "下载速度限制", "up_limit": "上传速度限制", "alt_dl_limit": "备用下载速度",
     "alt_up_limit": "备用上传速度", "speed-limit-down": "最大下载速度", "speed-limit-up": "最大上传速度",
     "speed-limit-down-enabled": "启用下载限速", "speed-limit-up-enabled": "启用上传限速",
@@ -5847,8 +5878,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "schedule_to_hour": "限速结束小时", "schedule_to_min": "限速结束分钟",
     "limit_lan_peers": "限速也应用于局域网 Peer", "limit_tcp_overhead": "限速包含 TCP 开销",
     "limit_utp_rate": "限速应用于 µTP", "connection_speed": "连接速度上限",
+]
 
-    // 连接、代理与发现
+private let downloaderConnectionPreferenceLabels: [String: String] = [
     "listen_port": "传入连接端口", "peer-port": "连接端口", "random_port": "使用随机端口",
     "peer-port-random-on-start": "启动时随机连接端口", "max_connec": "全局最大连接数",
     "max_connec_per_torrent": "单种最大连接数", "max_uploads": "全局上传槽位数",
@@ -5873,6 +5905,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "peer_turnover_cutoff": "连接用户轮换阈值", "peer_turnover_interval": "连接用户轮换间隔",
     "upload_choking_algorithm": "上传阻塞算法", "upload_slots_behavior": "上传槽位调整方式",
     "utp_tcp_mixed_mode": "TCP 与 µTP 混合模式",
+]
+
+private let downloaderProxyPreferenceLabels: [String: String] = [
     "proxy_type": "代理类型", "proxy_ip": "代理地址", "proxy_port": "代理端口",
     "proxy_username": "代理用户名", "proxy_password": "代理密码", "proxy_auth_enabled": "启用代理认证",
     "proxy_bittorrent": "种子协议连接使用代理", "proxy_peer_connections": "连接用户使用代理",
@@ -5881,8 +5916,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "i2p_mixed_mode": "启用 I2P 混合模式", "i2p_inbound_length": "I2P 入站隧道长度",
     "i2p_inbound_quantity": "I2P 入站隧道数量", "i2p_outbound_length": "I2P 出站隧道长度",
     "i2p_outbound_quantity": "I2P 出站隧道数量",
+]
 
-    // 队列、做种与追踪器
+private let downloaderQueuePreferenceLabels: [String: String] = [
     "queueing_enabled": "启用队列管理", "download-queue-enabled": "启用下载队列",
     "download-queue-size": "最大同时下载数", "seed-queue-enabled": "启用上传队列",
     "seed-queue-size": "最大同时上传数", "queue-stalled-enabled": "停滞任务占用队列位置",
@@ -5900,8 +5936,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "add_trackers_from_url_enabled": "从网址自动获取追踪器", "add_trackers_url": "追踪器列表网址",
     "add_trackers_url_list": "追踪器列表网址集合", "enable_embedded_tracker": "启用内置追踪器",
     "embedded_tracker_port": "内置追踪器端口", "embedded_tracker_port_forwarding": "自动映射内置追踪器端口",
+]
 
-    // RSS、通知与脚本
+private let downloaderAutomationPreferenceLabels: [String: String] = [
     "rss_processing_enabled": "启用 RSS", "rss_auto_downloading_enabled": "启用 RSS 自动下载",
     "rss_refresh_interval": "RSS 刷新间隔", "rss_fetch_delay": "RSS 请求间隔",
     "rss_max_articles_per_feed": "每个订阅最大文章数", "rss_smart_episode_filters": "RSS 智能剧集过滤器",
@@ -5913,8 +5950,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "autorun_enabled": "完成后运行外部程序", "autorun_program": "完成后运行的程序",
     "autorun_on_torrent_added_enabled": "添加种子后运行外部程序", "autorun_on_torrent_added_program": "添加种子后运行的程序",
     "python_executable_path": "Python 可执行文件路径",
+]
 
-    // 网页管理界面与远程访问
+private let downloaderWebPreferenceLabels: [String: String] = [
     "web_ui_address": "网页管理界面监听地址", "web_ui_port": "网页管理界面端口", "web_ui_username": "网页管理界面用户名",
     "web_ui_password": "网页管理界面密码", "use_https": "网页管理界面使用 HTTPS", "ssl_enabled": "启用 SSL",
     "ssl_listen_port": "SSL 监听端口", "web_ui_https_cert_path": "网页管理界面 HTTPS 证书路径",
@@ -5931,8 +5969,9 @@ private let downloaderPreferenceLabels: [String: String] = [
     "dyndns_service": "动态 DNS 服务商", "dyndns_domain": "动态 DNS 域名",
     "dyndns_username": "动态 DNS 用户名", "dyndns_password": "动态 DNS 密码",
     "ssrf_mitigation": "启用 SSRF 防护", "idn_support_enabled": "启用国际化域名支持",
+]
 
-    // 磁盘、日志与高级参数
+private let downloaderAdvancedPreferenceLabels: [String: String] = [
     "cache-size-mb": "磁盘缓存大小（MB）", "disk_cache": "磁盘缓存大小", "disk_cache_ttl": "磁盘缓存保留时间",
     "disk_io_type": "磁盘 I/O 类型", "disk_io_read_mode": "磁盘读取缓存模式", "disk_io_write_mode": "磁盘写入缓存模式",
     "disk_queue_size": "磁盘队列大小", "async_io_threads": "异步 I/O 线程数", "hashing_threads": "哈希计算线程数",
@@ -5956,6 +5995,24 @@ private let downloaderPreferenceLabels: [String: String] = [
     "status_bar_external_ip": "状态栏显示外网 IP", "blocklist-enabled": "启用 IP 黑名单",
     "blocklist-url": "IP 黑名单网址"
 ]
+
+private let downloaderPreferenceLabels: [String: String] = {
+    let groups: [[String: String]] = [
+        downloaderDownloadPreferenceLabels,
+        downloaderSpeedPreferenceLabels,
+        downloaderConnectionPreferenceLabels,
+        downloaderProxyPreferenceLabels,
+        downloaderQueuePreferenceLabels,
+        downloaderAutomationPreferenceLabels,
+        downloaderWebPreferenceLabels,
+        downloaderAdvancedPreferenceLabels
+    ]
+    var labels: [String: String] = [:]
+    for group in groups {
+        labels.merge(group) { _, latest in latest }
+    }
+    return labels
+}()
 
 private let downloaderPreferenceTokenLabels: [String: String] = [
     "enabled": "启用", "disabled": "禁用", "download": "下载", "down": "下载", "upload": "上传", "up": "上传",
