@@ -150,8 +150,8 @@ xcodebuild \
 
 - 修复 qB 下载器实时状态匹配失败导致活跃数、总数长期停留在首次值：支持下载器 ID、
   `name-id-category` 和 `wsKey`，实时帧先解包 `data/info/status/server_state`。
-- 修复速度 WebSocket 持续返回旧计数时，客户端因“字段存在”而跳过校准的问题；活跃数和总数
-  按实时刷新设置从 `main.status` 重新同步，手动刷新和重新进入下载页立即强制同步。
+- 修复 qB 总数/活跃数缺失和 Transmission 活跃数被覆盖：计数优先采用速度 WebSocket 的实时字段，
+  `main.status` 仅在实时帧缺少计数时兜底，慢速 HTTP 返回不会覆盖已经到达的新实时值。
 - 修复实时状态合并回归：上传/下载速度、会话流量和连接状态持续使用 WebSocket 更新，部分帧不会
   清空其他下载器的实时状态。
 - 优化站点首次进入：站点和站点配置响应的解析、索引及持久化整理移到后台任务，首帧优先显示缓存或
@@ -164,9 +164,15 @@ xcodebuild \
   下载器控制台、种子状态快捷筛选，以及“概览 / Tracker / 文件 / Peer”四分页详情。
 - 下载器卡片直接提供任务、添加、限速、设置入口；种子卡片补充队列、种子、用户、分享率和剩余时间，
   原有批量队列、校验、汇报、位置、分类、标签、分享限制和安全删除继续保留。
-- qB 和 Transmission 统一只读取后端计数字段 `activeTorrentCount`、`pausedTorrentCount`、
-  `torrentCount`（兼容后端下划线写法 `torrent_count`），移除容易串值的 `active_count`、
-  `active_torrents` 等别名。
+- 压缩下载页面纵向空间：传输中心趋势图和统计区缩短，下载器速度、计数与快捷操作改为紧凑单行布局，
+  卡片整体高度约为此前的一半，保留全部数据和操作入口。
+- 下载器参数设置补齐 qBittorrent 与 Transmission 中文字段和选项翻译；未知的新参数使用中文兜底名称，
+  不再直接显示下划线或连字符组成的英文接口键。
+- 下载器主卡片和选择列表改用 qBittorrent、Transmission 官方项目图标，并提供 1x/2x/3x 原生资源；
+  图标来源和许可证记录于 `THIRD_PARTY_NOTICES.md`。
+- qB 和 Transmission 统一读取语义明确的计数字段 `activeTorrentCount`、`pausedTorrentCount`、
+  `torrentCount` 及其下划线/total 兼容写法，不使用容易把其它统计串入卡片的泛化 `active_count`、
+  `total_count` 字段。
 - 修复任务中心重新打开时空白或长期停留骨架屏，新建任务模型会独立完成缓存和接口初始化。
 - 修复设置页管理、维护网格点击串联和重复箭头，每个入口使用独立按钮和统一导航路径。
 - 移除站点搜索栏下方重复的筛选结果标签，筛选弹窗应用后直接控制列表，角标继续显示生效数量。

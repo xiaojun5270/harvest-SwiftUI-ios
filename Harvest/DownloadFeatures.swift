@@ -179,16 +179,28 @@ private func downloaderDisplayAddress(_ downloader: DownloaderItem) -> String {
 }
 
 private let downloaderActiveCountKeys = [
-    "activeTorrentCount"
+    "activeTorrentCount",
+    "active_torrent_count",
+    "activeTorrents",
+    "active_torrents"
 ]
 
 private let downloaderPausedCountKeys = [
-    "pausedTorrentCount"
+    "pausedTorrentCount",
+    "paused_torrent_count",
+    "pausedTorrents",
+    "paused_torrents",
+    "stoppedTorrentCount",
+    "stopped_torrent_count"
 ]
 
 private let downloaderTotalCountKeys = [
     "torrentCount",
-    "torrent_count"
+    "torrent_count",
+    "totalTorrentCount",
+    "total_torrent_count",
+    "totalTorrents",
+    "total_torrents"
 ]
 
 private func downloaderActiveMetricInt(_ dictionary: [String: Any], category _: String) -> Int? {
@@ -1705,10 +1717,15 @@ final class DownloadsViewModel: ObservableObject {
                 catch { return }
             }
             guard let model = reference.value, !Task.isCancelled else { return }
-            // The speed WebSocket can keep emitting an old count snapshot even
-            // while speed/session metrics change. Presence is not freshness, so
-            // every enabled downloader must be reconciled with main.status.
-            let candidates = model.downloaders.filter(\.enabled)
+            // Counts belong to the real-time speed stream. Query main.status
+            // only when that stream does not expose the required fields.
+            let candidates = model.downloaders.filter { downloader in
+                guard downloader.enabled else { return false }
+                guard let live = model.liveStatus(for: downloader) else { return true }
+                let liveStatus = model.reportedDownloaderStatus(live) ?? live
+                return downloaderActiveMetricInt(liveStatus, category: downloader.category) == nil
+                    || downloaderTotalMetricInt(liveStatus, category: downloader.category) == nil
+            }
             guard !candidates.isEmpty else {
                 model.lastCountRefreshAt = Date()
                 model.countRefreshTask = nil
@@ -1755,9 +1772,23 @@ final class DownloadsViewModel: ObservableObject {
         guard let index = downloaders.firstIndex(where: { $0.id == downloaderID }),
               let status = reportedDownloaderStatus(raw) else { return false }
         let category = downloaders[index].category
-        let active = downloaderActiveMetricInt(status, category: category)
-        let paused = downloaderPausedMetricInt(status, category: category)
-        let total = downloaderTotalMetricInt(status, category: category)
+        var hasLiveActive = false
+        var hasLivePaused = false
+        var hasLiveTotal = false
+        if let live = liveStatus(for: downloaders[index]) {
+            let liveStatus = reportedDownloaderStatus(live) ?? live
+            hasLiveActive = downloaderActiveMetricInt(liveStatus, category: category) != nil
+            hasLivePaused = downloaderPausedMetricInt(liveStatus, category: category) != nil
+            hasLiveTotal = downloaderTotalMetricInt(liveStatus, category: category) != nil
+            if hasLiveActive, hasLiveTotal {
+                // The WebSocket may have arrived while this slower fallback
+                // request was running. Never overwrite its newer counters.
+                return true
+            }
+        }
+        let active: Int? = hasLiveActive ? nil : downloaderActiveMetricInt(status, category: category)
+        let paused: Int? = hasLivePaused ? nil : downloaderPausedMetricInt(status, category: category)
+        let total: Int? = hasLiveTotal ? nil : downloaderTotalMetricInt(status, category: category)
         guard active != nil || paused != nil || total != nil else { return false }
         let current = downloaders[index]
         var values: [String: Any] = [:]
@@ -1946,18 +1977,33 @@ final class DownloadsViewModel: ObservableObject {
             guard let live = liveStatus(for: downloader) else { continue }
             matchedLiveStatus = true
             var merged = downloader.raw
-            // The WebSocket frame is the live source for speeds, session traffic,
-            // limits and connection state. Its count fields may be stale on the
-            // backend, so counts are always carried forward from the last HTTP
-            // reconciliation instead of being replaced by this frame.
+            // Match Flutter: the speed WebSocket is authoritative for live
+            // speeds and exact counters. Preserve only fields omitted by the
+            // current frame, never overwrite counters that are present.
             merged["status"] = live
-            let preservedCounts: [String: Any] = [
-                "activeTorrentCount": downloader.activeTorrentCount,
-                "pausedTorrentCount": downloader.pausedTorrentCount,
-                "torrentCount": downloader.totalTorrentCount
-            ]
-            merged = mergingDownloaderStatus(preservedCounts, into: merged)
+            let liveStatus = reportedDownloaderStatus(live) ?? live
+            var preservedCounts: [String: Any] = [:]
+            if downloaderActiveMetricInt(liveStatus, category: downloader.category) == nil {
+                preservedCounts["activeTorrentCount"] = downloader.activeTorrentCount
+            }
+            if downloaderPausedMetricInt(liveStatus, category: downloader.category) == nil {
+                preservedCounts["pausedTorrentCount"] = downloader.pausedTorrentCount
+            }
+            if downloaderTotalMetricInt(liveStatus, category: downloader.category) == nil {
+                preservedCounts["torrentCount"] = downloader.totalTorrentCount
+            }
+            if !preservedCounts.isEmpty {
+                merged = mergingDownloaderStatus(preservedCounts, into: merged)
+            }
             let next = DownloaderItem(merged)
+            if next.activeTorrentCount != downloader.activeTorrentCount
+                || next.pausedTorrentCount != downloader.pausedTorrentCount
+                || next.totalTorrentCount != downloader.totalTorrentCount {
+                recordAppLog(
+                    .debug,
+                    "下载器 \(downloader.id) 实时计数更新：活跃 \(downloader.activeTorrentCount)→\(next.activeTorrentCount)，暂停 \(downloader.pausedTorrentCount)→\(next.pausedTorrentCount)，总数 \(downloader.totalTorrentCount)→\(next.totalTorrentCount)"
+                )
+            }
             guard downloaderLiveSignature(next) != downloaderLiveSignature(downloader) else { continue }
             updated[index] = next
             changed = true
@@ -2232,23 +2278,21 @@ private struct DownloaderFleetOverview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("传输中心")
-                        .font(.headline.weight(.semibold))
-                    Text("\(onlineCount) / \(enabled.count) 个下载器在线")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                Text("传输中心")
+                    .font(.subheadline.weight(.semibold))
+                Text("\(onlineCount)/\(enabled.count) 在线")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     fleetSpeed("arrow.down", value: formatSpeed(downloadSpeed), color: HarvestTheme.blue)
                     fleetSpeed("arrow.up", value: formatSpeed(uploadSpeed), color: HarvestTheme.green)
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 fleetMetric("在线", value: "\(onlineCount)", icon: "network", color: HarvestTheme.green)
                 fleetMetric("活跃", value: "\(activeCount)", icon: "bolt.fill", color: HarvestTheme.amber)
                 fleetMetric("任务", value: "\(totalCount)", icon: "square.stack.3d.up.fill", color: HarvestTheme.blue)
@@ -2284,17 +2328,18 @@ private struct DownloaderFleetOverview: View {
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .chartLegend(.hidden)
-                .frame(height: 72)
+                .frame(height: 34)
                 .accessibilityLabel("下载器实时速度趋势")
             }
         }
-        .padding(14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
             Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 0.75)
         }
         .padding(.horizontal, 16)
@@ -2305,27 +2350,26 @@ private struct DownloaderFleetOverview: View {
             Image(systemName: icon)
             Text(value).monospacedDigit()
         }
-        .font(.caption.weight(.semibold))
+        .font(.caption2.weight(.semibold))
         .foregroundStyle(color)
         .lineLimit(1)
         .minimumScaleFactor(0.65)
     }
 
     private func fleetMetric(_ label: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(color)
             Text(value)
-                .font(.subheadline.weight(.bold).monospacedDigit())
+                .font(.caption.weight(.bold).monospacedDigit())
             Text(label)
-                .font(.caption2)
+                .font(.system(size: 8))
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 28, alignment: .center)
+        .padding(.horizontal, 4)
+        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 
@@ -2351,7 +2395,7 @@ struct DownloadsView: View {
         ScrollView {
             if model.isLoading { LoadingState() }
             else {
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: 8) {
                     if !model.downloaders.isEmpty {
                         DownloaderFleetOverview(
                             downloaders: model.downloaders,
@@ -2370,7 +2414,7 @@ struct DownloadsView: View {
                         }
                         .frame(minHeight: 260)
                     } else {
-                        LazyVStack(spacing: 8) {
+                        LazyVStack(spacing: 6) {
                             ForEach(model.downloaders) { downloader in
                                 DownloaderCard(
                                     item: downloader,
@@ -2402,7 +2446,7 @@ struct DownloadsView: View {
                         }
                         .padding(.horizontal, 16)
                     }
-                }.padding(.vertical, 12)
+                }.padding(.vertical, 6)
             }
         }
         .background(Color(uiColor: .systemGroupedBackground))
@@ -2538,7 +2582,7 @@ struct DownloadsView: View {
     }
 
     private var downloaderListHeader: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Label("下载器", systemImage: "externaldrive.fill")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -2547,7 +2591,7 @@ struct DownloadsView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(HarvestTheme.blue)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 32, height: 32)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -2561,6 +2605,7 @@ struct DownloadsView: View {
             .help("增加下载器")
         }
         .padding(.horizontal, 16)
+        .frame(minHeight: 34)
     }
 
     private func synchronizeRefreshSettings() {
@@ -2771,16 +2816,30 @@ struct CompactFlowLayout: Layout {
     }
 }
 
+private struct DownloaderBrandIcon: View {
+    let category: String
+    let size: CGFloat
+
+    private var assetName: String {
+        downloaderIsTransmission(category) ? "DownloaderTransmission" : "DownloaderQB"
+    }
+
+    var body: some View {
+        Image(assetName)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
 struct DownloaderIdentityRow: View {
     let downloader: DownloaderItem
     var showsChevron = false
     var compact = false
 
     private var isTransmission: Bool { downloaderIsTransmission(downloader.category) }
-    private var accentColor: Color { isTransmission ? HarvestTheme.coral : HarvestTheme.blue }
-    private var icon: String {
-        isTransmission ? "arrow.triangle.2.circlepath" : "bolt.horizontal.circle.fill"
-    }
     private var typeName: String { isTransmission ? "Transmission" : "qBittorrent" }
     private var detailText: String {
         let address = downloaderDisplayAddress(downloader)
@@ -2790,7 +2849,7 @@ struct DownloaderIdentityRow: View {
 
     var body: some View {
         HStack(spacing: compact ? 9 : 12) {
-            SymbolBadge(icon: icon, color: accentColor, size: compact ? 36 : 44)
+            DownloaderBrandIcon(category: downloader.category, size: compact ? 36 : 44)
             VStack(alignment: .leading, spacing: compact ? 2 : 3) {
                 HStack(spacing: 7) {
                     Text(downloader.name)
@@ -2955,19 +3014,16 @@ struct DownloaderCard: View {
 
     private var isTransmission: Bool { downloaderIsTransmission(item.category) }
     private var accentColor: Color { isTransmission ? HarvestTheme.coral : HarvestTheme.blue }
-    private var downloaderIcon: String {
-        isTransmission ? "arrow.triangle.2.circlepath" : "bolt.horizontal.circle.fill"
-    }
     private var downloaderTypeName: String { isTransmission ? "Transmission" : "qBittorrent" }
     private var connected: Bool {
         let state = item.connectionStatus.lowercased()
         return item.hasLiveStatus && !state.contains("disconnected") && !state.contains("offline")
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
             downloaderHeader
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 speedPanel(
                     "下载",
                     speed: item.downloadSpeed,
@@ -2984,7 +3040,7 @@ struct DownloaderCard: View {
                 )
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 compactMetric("活跃", value: activeCountText, color: HarvestTheme.green)
                 compactMetric("暂停", value: "\(item.pausedTorrentCount)", color: HarvestTheme.amber)
                 compactMetric("总数", value: totalCountText, color: accentColor)
@@ -2995,7 +3051,7 @@ struct DownloaderCard: View {
                 )
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 quickAction("任务", icon: "list.bullet.rectangle", color: accentColor, action: onOpenTorrents)
                 quickAction("添加", icon: "plus", color: HarvestTheme.green, action: onAddTorrent)
                 quickAction("限速", icon: "gauge.with.dots.needle.67percent", color: HarvestTheme.amber, action: onSpeedSettings)
@@ -3003,11 +3059,11 @@ struct DownloaderCard: View {
             }
 
             if item.uploadLimit > 0 || item.downloadLimit > 0 || item.alternativeSpeedEnabled {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: "gauge.with.dots.needle.33percent")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(HarvestTheme.amber)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 20, height: 20)
                         .background(HarvestTheme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     Text(item.alternativeSpeedEnabled ? "备用限速" : "速度限制")
                         .font(.caption.weight(.semibold))
@@ -3021,31 +3077,31 @@ struct DownloaderCard: View {
                         }
                     }
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(HarvestTheme.amber.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(HarvestTheme.amber.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
-        .padding(14)
+        .padding(6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(accentColor.opacity(connected ? 0.18 : 0.08), lineWidth: 0.8)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityAction(named: Text("打开种子列表")) { onOpenTorrents() }
     }
 
     private var downloaderHeader: some View {
-        HStack(alignment: .center, spacing: 10) {
-            SymbolBadge(icon: downloaderIcon, color: accentColor, size: 42)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .center, spacing: 7) {
+            DownloaderBrandIcon(category: item.category, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(item.name)
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 HStack(spacing: 5) {
@@ -3066,7 +3122,7 @@ struct DownloaderCard: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .font(.caption2.weight(.medium))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             }
             .layoutPriority(1)
@@ -3091,72 +3147,73 @@ struct DownloaderCard: View {
                 Button(role: .destructive, action: onDelete) { Label("删除", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis.circle")
-                    .font(.title3)
+                    .font(.body)
                     .foregroundStyle(accentColor)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 26, height: 26)
             }
             .accessibilityLabel("下载器操作")
         }
     }
 
     private func speedPanel(_ label: String, speed: Double, session: Double, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 23, height: 23)
-                    .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 18, height: 18)
+                .background(color, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            VStack(alignment: .leading, spacing: 0) {
                 Text(label)
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
                 Text(formatBytes(session))
-                    .font(.caption2.monospacedDigit())
+                    .font(.system(size: 7).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
             }
+            Spacer(minLength: 3)
             Text(formatSpeed(speed))
-                .font(.title3.weight(.bold).monospacedDigit())
+                .font(.caption.weight(.bold).monospacedDigit())
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
         }
-        .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
-        .padding(10)
-        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func compactMetric(_ label: String, value: String, color: Color) -> some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 1) {
             Text(value)
-                .font(.caption.weight(.bold).monospacedDigit())
+                .font(.caption2.weight(.bold).monospacedDigit())
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.48)
             Text(label)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 8, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 38)
-        .padding(.horizontal, 4)
-        .background(color.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 24)
+        .padding(.horizontal, 3)
+        .background(color.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
     private func quickAction(_ label: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(color)
                 Text(label)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, minHeight: 42)
-            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .frame(maxWidth: .infinity, minHeight: 28)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -5388,7 +5445,7 @@ struct DownloaderSettingsSheet: View {
     private var sections: [String] {
         let preferred = isTransmission
             ? ["下载设置", "带宽设置", "网络设置", "队列设置", "高级"]
-            : ["行为", "下载", "连接", "速度", "BitTorrent", "RSS", "WebUI", "高级"]
+            : ["行为", "下载", "连接", "速度", "协议与队列", "订阅", "远程管理", "高级"]
         return preferred.filter { section in drafts.contains { $0.section == section } }
     }
     private var visibleDrafts: [DownloaderPreferenceDraft] {
@@ -5568,8 +5625,8 @@ private struct TransmissionWeekdaySelector: View {
                     .buttonStyle(.plain)
                 }
             }
-            Text("alt-speed-time-day")
-                .font(.caption2.monospaced())
+            Text("可多选星期；“每天、工作日、周末”可快速设置。")
+                .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
     }
@@ -5607,11 +5664,13 @@ private func preferenceChoices(_ key: String, transmission: Bool) -> [Downloader
     }
     switch key {
     case "locale":
-        return choices([("zh_CN", "简体中文"), ("en", "English"), ("ja", "日本語"), ("ko", "한국어")])
+        return choices([("zh_CN", "简体中文"), ("en", "英语"), ("ja", "日语"), ("ko", "韩语")])
     case "torrent_content_layout":
         return choices([("Original", "原始"), ("Subfolder", "子文件夹"), ("NoSubfolder", "无子文件夹")])
     case "torrent_stop_condition":
         return choices([("None", "无"), ("MetadataReceived", "获取元数据后"), ("FilesChecked", "文件校验后")])
+    case "bittorrent_protocol":
+        return choices([("0", "TCP 与 µTP"), ("1", "仅 TCP"), ("2", "仅 µTP")])
     case "proxy_type":
         return choices([("None", "无"), ("SOCKS4", "SOCKS4"), ("SOCKS5", "SOCKS5"), ("HTTP", "HTTP")])
     case "resume_data_storage_type":
@@ -5625,7 +5684,7 @@ private func preferenceChoices(_ key: String, transmission: Bool) -> [Downloader
     case "encryption":
         return choices([("0", "允许加密"), ("1", "强制加密"), ("2", "禁用加密")])
     case "max_ratio_act":
-        return choices([("0", "停止 Torrent"), ("1", "删除 Torrent")])
+        return choices([("0", "暂停任务"), ("1", "删除任务")])
     case "dyndns_service":
         return choices([("0", "DynDNS"), ("1", "NoIP")])
     case "disk_io_type":
@@ -5635,7 +5694,11 @@ private func preferenceChoices(_ key: String, transmission: Bool) -> [Downloader
     case "utp_tcp_mixed_mode":
         return choices([("0", "优先使用 TCP"), ("1", "优先使用 µTP"), ("2", "仅 TCP")])
     case "upload_choking_algorithm":
-        return choices([("0", "固定上传槽位"), ("1", "反阻塞")])
+        return choices([("0", "轮询"), ("1", "最快上传"), ("2", "反吸血")])
+    case "upload_slots_behavior":
+        return choices([("0", "固定上传槽位"), ("1", "根据上传速度调整")])
+    case "auto_delete_mode":
+        return choices([("0", "不自动删除"), ("1", "删除原始 .torrent 文件")])
     default:
         return []
     }
@@ -5659,10 +5722,10 @@ private func preferenceSection(_ key: String, transmission: Bool) -> String {
         }
         return "高级"
     }
-    if value.hasPrefix("rss_") { return "RSS" }
+    if value.hasPrefix("rss_") { return "订阅" }
     if hasAnyPrefix(value, ["web_ui", "bypass_", "alternative_webui", "dyndns_"])
         || value == "use_https" {
-        return "WebUI"
+        return "远程管理"
     }
     if hasAnyPrefix(value, [
         "dl_limit", "up_limit", "alt_dl", "alt_up", "scheduler", "schedule_", "limit_"
@@ -5679,7 +5742,7 @@ private func preferenceSection(_ key: String, transmission: Bool) -> String {
         || hasAnyPrefix(value, [
             "max_active", "slow_torrent", "max_ratio", "max_seeding", "add_trackers", "embedded_tracker"
         ]) {
-        return "BitTorrent"
+        return "协议与队列"
     }
     if containsAny(value, [
         "save_path", "temp_path", "incomplete", "category_changed", "torrent_changed",
@@ -5708,31 +5771,177 @@ private func equalsAny(_ value: String, _ candidates: [String]) -> Bool {
     candidates.contains(value)
 }
 
+private let downloaderPreferenceLabels: [String: String] = [
+    // 下载与文件
+    "save_path": "默认保存路径", "download-dir": "默认保存目录", "temp_path": "临时目录",
+    "temp_path_enabled": "启用临时目录", "incomplete-dir": "未完成目录", "incomplete-dir-enabled": "启用未完成目录",
+    "incomplete_files_ext": "未完成文件添加扩展名", "rename-partial-files": "重命名未完成文件",
+    "preallocate_all": "预分配所有文件", "use_unwanted_folder": "使用不需要文件目录",
+    "use_category_paths_in_manual_mode": "手动模式使用分类路径", "use_subcategories": "启用子分类",
+    "torrent_content_layout": "种子内容布局", "torrent_content_remove_option": "删除内容处理方式",
+    "torrent_file_size_limit": "种子文件大小上限", "torrent_stop_condition": "种子自动停止条件",
+    "delete_torrent_content_files": "删除任务时删除内容文件", "add_stopped_enabled": "添加种子时保持停止",
+    "add_to_top_of_queue": "新种子加入队列顶部", "auto_tmm_enabled": "启用自动种子管理",
+    "category_changed_tmm_enabled": "分类变化时自动管理", "torrent_changed_tmm_enabled": "保存路径变化时自动管理",
+    "save_path_changed_tmm_enabled": "默认路径变化时自动管理", "export_dir": "复制 .torrent 文件到目录",
+    "export_dir_fin": "完成后复制 .torrent 文件到目录", "start-added-torrents": "自动启动新种子",
+    "trash-original-torrent-files": "删除原始种子文件", "scan_dirs": "自动监控目录",
+    "excluded_file_names": "排除的文件名", "excluded_file_names_enabled": "启用文件名排除规则",
+
+    // 速度与调度
+    "dl_limit": "下载速度限制", "up_limit": "上传速度限制", "alt_dl_limit": "备用下载速度",
+    "alt_up_limit": "备用上传速度", "speed-limit-down": "最大下载速度", "speed-limit-up": "最大上传速度",
+    "speed-limit-down-enabled": "启用下载限速", "speed-limit-up-enabled": "启用上传限速",
+    "alt-speed-down": "备用下载速度", "alt-speed-up": "备用上传速度", "alt-speed-enabled": "启用备用限速",
+    "alt-speed-time-enabled": "启用定时备用限速", "alt-speed-time-begin": "备用限速开始时间",
+    "alt-speed-time-end": "备用限速结束时间", "alt-speed-time-day": "备用限速生效日期",
+    "scheduler_enabled": "启用限速计划", "scheduler_days": "限速计划生效日期",
+    "schedule_from_hour": "限速开始小时", "schedule_from_min": "限速开始分钟",
+    "schedule_to_hour": "限速结束小时", "schedule_to_min": "限速结束分钟",
+    "limit_lan_peers": "限速也应用于局域网 Peer", "limit_tcp_overhead": "限速包含 TCP 开销",
+    "limit_utp_rate": "限速应用于 µTP", "connection_speed": "连接速度上限",
+
+    // 连接、代理与发现
+    "listen_port": "传入连接端口", "peer-port": "连接端口", "random_port": "使用随机端口",
+    "peer-port-random-on-start": "启动时随机连接端口", "max_connec": "全局最大连接数",
+    "max_connec_per_torrent": "单种最大连接数", "max_uploads": "全局上传槽位数",
+    "max_uploads_per_torrent": "单种上传槽位数", "peer-limit-global": "全局连接用户上限",
+    "peer-limit-per-torrent": "单种连接用户上限", "upnp": "启用自动端口映射（UPnP / NAT-PMP）",
+    "upnp_lease_duration": "UPnP 租约时长", "port-forwarding-enabled": "启用端口自动映射",
+    "tcp-enabled": "启用 TCP", "dht": "启用分布式哈希表（DHT）", "dht-enabled": "启用分布式哈希表（DHT）",
+    "dht_bootstrap_nodes": "DHT 引导节点", "pex": "启用用户交换（PEX）", "pex-enabled": "启用用户交换（PEX）",
+    "lsd": "启用本地用户发现", "lpd-enabled": "启用本地用户发现", "utp-enabled": "启用 µTP 带宽管理",
+    "encryption": "连接加密模式", "anonymous_mode": "启用匿名模式", "bittorrent_protocol": "BitTorrent 传输协议",
+    "current_network_interface": "绑定网络接口", "current_interface_name": "当前网络接口名称",
+    "current_interface_address": "当前网络接口地址", "outgoing_ports_min": "出站端口范围起始",
+    "outgoing_ports_max": "出站端口范围结束", "ip_filter_enabled": "启用 IP 过滤器",
+    "ip_filter_path": "IP 过滤器文件", "ip_filter_trackers": "过滤追踪器地址",
+    "banned_IPs": "已封禁 IP 列表", "block_peers_on_privileged_ports": "阻止使用特权端口的连接用户",
+    "resolve_peer_countries": "解析连接用户所在国家或地区", "reannounce_when_address_changed": "IP 变化后重新汇报",
+    "validate_https_tracker_certificate": "验证 HTTPS 追踪器证书", "announce_ip": "向追踪器汇报的 IP",
+    "announce_port": "向追踪器汇报的端口", "announce_to_all_tiers": "向所有追踪器层级汇报",
+    "announce_to_all_trackers": "向所有追踪器汇报", "merge_trackers": "合并相同追踪器",
+    "max_concurrent_http_announces": "最大并发 HTTP 汇报数", "stop_tracker_timeout": "停止追踪器超时",
+    "peer_tos": "连接用户流量服务类型", "peer_turnover": "连接用户轮换比例",
+    "peer_turnover_cutoff": "连接用户轮换阈值", "peer_turnover_interval": "连接用户轮换间隔",
+    "upload_choking_algorithm": "上传阻塞算法", "upload_slots_behavior": "上传槽位调整方式",
+    "utp_tcp_mixed_mode": "TCP 与 µTP 混合模式",
+    "proxy_type": "代理类型", "proxy_ip": "代理地址", "proxy_port": "代理端口",
+    "proxy_username": "代理用户名", "proxy_password": "代理密码", "proxy_auth_enabled": "启用代理认证",
+    "proxy_bittorrent": "种子协议连接使用代理", "proxy_peer_connections": "连接用户使用代理",
+    "proxy_hostname_lookup": "通过代理解析主机名", "proxy_rss": "RSS 使用代理", "proxy_misc": "其他请求使用代理",
+    "i2p_enabled": "启用 I2P", "i2p_address": "I2P 地址", "i2p_port": "I2P 端口",
+    "i2p_mixed_mode": "启用 I2P 混合模式", "i2p_inbound_length": "I2P 入站隧道长度",
+    "i2p_inbound_quantity": "I2P 入站隧道数量", "i2p_outbound_length": "I2P 出站隧道长度",
+    "i2p_outbound_quantity": "I2P 出站隧道数量",
+
+    // 队列、做种与追踪器
+    "queueing_enabled": "启用队列管理", "download-queue-enabled": "启用下载队列",
+    "download-queue-size": "最大同时下载数", "seed-queue-enabled": "启用上传队列",
+    "seed-queue-size": "最大同时上传数", "queue-stalled-enabled": "停滞任务占用队列位置",
+    "queue-stalled-minutes": "判定停滞的分钟数", "max_active_checking_torrents": "最大同时校验数",
+    "max_active_downloads": "最大活动下载数", "max_active_uploads": "最大活动上传数",
+    "max_active_torrents": "最大活动种子数", "dont_count_slow_torrents": "慢速种子不计入活动限制",
+    "slow_torrent_dl_rate_threshold": "慢速下载判定速度", "slow_torrent_ul_rate_threshold": "慢速上传判定速度",
+    "slow_torrent_inactive_timer": "慢速种子无活动时间", "max_ratio_enabled": "启用分享率限制",
+    "max_ratio": "默认分享率上限", "max_ratio_act": "达到分享率后的操作",
+    "max_seeding_time_enabled": "启用做种时间限制", "max_seeding_time": "最大做种时间",
+    "max_inactive_seeding_time_enabled": "启用无活动做种限制", "max_inactive_seeding_time": "最大无活动做种时间",
+    "seedRatioLimited": "启用做种分享率限制", "seedRatioLimit": "默认分享率上限",
+    "idle-seeding-limit-enabled": "启用无流量做种限制", "idle-seeding-limit": "无流量做种停止时间",
+    "add_trackers_enabled": "自动添加追踪器", "add_trackers": "自动添加的追踪器列表",
+    "add_trackers_from_url_enabled": "从网址自动获取追踪器", "add_trackers_url": "追踪器列表网址",
+    "add_trackers_url_list": "追踪器列表网址集合", "enable_embedded_tracker": "启用内置追踪器",
+    "embedded_tracker_port": "内置追踪器端口", "embedded_tracker_port_forwarding": "自动映射内置追踪器端口",
+
+    // RSS、通知与脚本
+    "rss_processing_enabled": "启用 RSS", "rss_auto_downloading_enabled": "启用 RSS 自动下载",
+    "rss_refresh_interval": "RSS 刷新间隔", "rss_fetch_delay": "RSS 请求间隔",
+    "rss_max_articles_per_feed": "每个订阅最大文章数", "rss_smart_episode_filters": "RSS 智能剧集过滤器",
+    "rss_download_repack_proper_episodes": "RSS 下载 REPACK / PROPER 剧集",
+    "mail_notification_enabled": "启用邮件通知", "mail_notification_sender": "发件人地址",
+    "mail_notification_email": "收件人地址", "mail_notification_smtp": "SMTP 服务器",
+    "mail_notification_ssl_enabled": "SMTP 使用 SSL", "mail_notification_auth_enabled": "SMTP 启用认证",
+    "mail_notification_username": "SMTP 用户名", "mail_notification_password": "SMTP 密码",
+    "autorun_enabled": "完成后运行外部程序", "autorun_program": "完成后运行的程序",
+    "autorun_on_torrent_added_enabled": "添加种子后运行外部程序", "autorun_on_torrent_added_program": "添加种子后运行的程序",
+    "python_executable_path": "Python 可执行文件路径",
+
+    // 网页管理界面与远程访问
+    "web_ui_address": "网页管理界面监听地址", "web_ui_port": "网页管理界面端口", "web_ui_username": "网页管理界面用户名",
+    "web_ui_password": "网页管理界面密码", "use_https": "网页管理界面使用 HTTPS", "ssl_enabled": "启用 SSL",
+    "ssl_listen_port": "SSL 监听端口", "web_ui_https_cert_path": "网页管理界面 HTTPS 证书路径",
+    "web_ui_https_key_path": "网页管理界面 HTTPS 私钥路径", "web_ui_session_timeout": "网页管理界面会话超时",
+    "web_ui_max_auth_fail_count": "网页管理界面最大登录失败次数", "web_ui_ban_duration": "网页管理界面登录封禁时长",
+    "web_ui_csrf_protection_enabled": "启用跨站请求伪造防护", "web_ui_clickjacking_protection_enabled": "启用防点击劫持",
+    "web_ui_host_header_validation_enabled": "验证网页管理界面主机请求头", "web_ui_domain_list": "允许访问网页管理界面的域名",
+    "web_ui_secure_cookie_enabled": "网页管理界面使用安全 Cookie", "web_ui_upnp": "自动映射网页管理界面端口",
+    "web_ui_reverse_proxy_enabled": "启用网页管理界面反向代理", "web_ui_reverse_proxies_list": "可信反向代理列表",
+    "web_ui_use_custom_http_headers_enabled": "启用自定义 HTTP 请求头", "web_ui_custom_http_headers": "自定义 HTTP 请求头",
+    "alternative_webui_enabled": "启用替代网页管理界面", "alternative_webui_path": "替代网页管理界面路径",
+    "bypass_local_auth": "本机访问跳过认证", "bypass_auth_subnet_whitelist_enabled": "启用免认证网段",
+    "bypass_auth_subnet_whitelist": "免认证网段列表", "dyndns_enabled": "启用动态 DNS",
+    "dyndns_service": "动态 DNS 服务商", "dyndns_domain": "动态 DNS 域名",
+    "dyndns_username": "动态 DNS 用户名", "dyndns_password": "动态 DNS 密码",
+    "ssrf_mitigation": "启用 SSRF 防护", "idn_support_enabled": "启用国际化域名支持",
+
+    // 磁盘、日志与高级参数
+    "cache-size-mb": "磁盘缓存大小（MB）", "disk_cache": "磁盘缓存大小", "disk_cache_ttl": "磁盘缓存保留时间",
+    "disk_io_type": "磁盘 I/O 类型", "disk_io_read_mode": "磁盘读取缓存模式", "disk_io_write_mode": "磁盘写入缓存模式",
+    "disk_queue_size": "磁盘队列大小", "async_io_threads": "异步 I/O 线程数", "hashing_threads": "哈希计算线程数",
+    "file_pool_size": "文件句柄池大小", "checking_memory_use": "校验内存使用量",
+    "memory_working_set_limit": "内存工作集上限", "enable_coalesce_read_write": "合并磁盘读写",
+    "enable_piece_extent_affinity": "启用分片范围亲和性", "enable_upload_suggestions": "启用上传分片建议",
+    "send_buffer_low_watermark": "发送缓冲区低水位", "send_buffer_watermark": "发送缓冲区高水位",
+    "send_buffer_watermark_factor": "发送缓冲区水位系数", "socket_backlog_size": "Socket 等待队列大小",
+    "socket_receive_buffer_size": "Socket 接收缓冲区", "socket_send_buffer_size": "Socket 发送缓冲区",
+    "request_queue_size": "请求队列大小", "bdecode_depth_limit": "Bencode 最大嵌套深度",
+    "bdecode_token_limit": "Bencode 最大标记数", "resume_data_storage_type": "恢复数据存储方式",
+    "save_resume_data_interval": "保存恢复数据间隔", "save_statistics_interval": "保存统计数据间隔",
+    "refresh_interval": "界面刷新间隔", "performance_warning": "显示性能警告",
+    "recheck_completed_torrents": "完成后重新校验种子", "ignore_ssl_errors": "忽略 SSL 错误",
+    "mark_of_the_web": "为下载文件添加网络来源标记", "locale": "界面语言",
+    "app_instance_name": "应用实例名称", "auto_delete_mode": "自动删除 .torrent 文件模式",
+    "file_log_enabled": "启用文件日志", "file_log_path": "日志文件路径", "file_log_max_size": "日志文件大小上限",
+    "file_log_age": "日志保留时间", "file_log_age_type": "日志保留时间单位",
+    "file_log_backup_enabled": "启用日志备份", "file_log_delete_old": "自动删除旧日志",
+    "confirm_torrent_deletion": "删除种子前确认", "confirm_torrent_recheck": "重新校验前确认",
+    "status_bar_external_ip": "状态栏显示外网 IP", "blocklist-enabled": "启用 IP 黑名单",
+    "blocklist-url": "IP 黑名单网址"
+]
+
+private let downloaderPreferenceTokenLabels: [String: String] = [
+    "enabled": "启用", "disabled": "禁用", "download": "下载", "down": "下载", "upload": "上传", "up": "上传",
+    "speed": "速度", "limit": "限制", "limits": "限制", "path": "路径", "dir": "目录", "file": "文件",
+    "files": "文件", "torrent": "种子", "torrents": "种子", "peer": "Peer", "peers": "Peer",
+    "tracker": "Tracker", "trackers": "Tracker", "queue": "队列", "port": "端口", "proxy": "代理",
+    "address": "地址", "username": "用户名", "password": "密码", "auth": "认证", "network": "网络",
+    "connection": "连接", "max": "最大", "min": "最小", "global": "全局", "default": "默认",
+    "interval": "间隔", "timeout": "超时", "time": "时间", "day": "日期", "days": "日期",
+    "hour": "小时", "hours": "小时", "minute": "分钟", "minutes": "分钟", "cache": "缓存",
+    "memory": "内存", "disk": "磁盘", "log": "日志", "logging": "日志", "web": "网页",
+    "ui": "界面", "rss": "RSS", "ssl": "SSL", "https": "HTTPS", "http": "HTTP", "tcp": "TCP",
+    "utp": "µTP", "dht": "DHT", "pex": "PEX", "lpd": "本地发现", "lsd": "本地发现",
+    "ratio": "分享率", "seeding": "做种", "seed": "做种", "active": "活动", "checking": "校验",
+    "confirm": "确认", "delete": "删除", "remove": "移除", "start": "启动", "stop": "停止",
+    "added": "新增", "alternative": "备用", "schedule": "计划", "scheduler": "计划", "from": "开始",
+    "to": "结束", "random": "随机", "interface": "接口", "name": "名称", "type": "类型",
+    "size": "大小", "count": "数量", "country": "国家或地区", "resolve": "解析", "validate": "验证",
+    "ignore": "忽略", "use": "使用", "auto": "自动", "automatic": "自动", "anonymous": "匿名",
+    "encryption": "加密", "notification": "通知", "mail": "邮件", "sender": "发件人", "email": "邮箱",
+    "custom": "自定义", "headers": "请求头", "reverse": "反向", "session": "会话", "secure": "安全",
+    "advanced": "高级", "performance": "性能", "warning": "警告", "storage": "存储", "resume": "恢复数据"
+]
+
 private func preferenceLabel(_ key: String) -> String {
-    let labels: [String: String] = [
-        "save_path": "默认保存路径", "download-dir": "默认保存目录", "temp_path": "临时目录",
-        "temp_path_enabled": "启用临时目录", "incomplete-dir": "未完成目录", "incomplete-dir-enabled": "启用未完成目录",
-        "dl_limit": "下载速度限制", "up_limit": "上传速度限制", "alt_dl_limit": "备用下载速度",
-        "alt_up_limit": "备用上传速度", "speed-limit-down": "最大下载速度", "speed-limit-up": "最大上传速度",
-        "speed-limit-down-enabled": "启用下载限速", "speed-limit-up-enabled": "启用上传限速",
-        "alt-speed-down": "备用下载速度", "alt-speed-up": "备用上传速度", "alt-speed-enabled": "启用备用限速",
-        "alt-speed-time-enabled": "启用定时备用限速", "alt-speed-time-begin": "备用限速开始时间",
-        "alt-speed-time-end": "备用限速结束时间", "alt-speed-time-day": "备用限速生效日期",
-        "listen_port": "传入连接端口", "peer-port": "连接端口", "max_connec": "全局最大连接数",
-        "max_connec_per_torrent": "单种最大连接数", "peer-limit-global": "全局 Peer 上限",
-        "peer-limit-per-torrent": "单种 Peer 上限", "dht": "启用 DHT", "dht-enabled": "启用 DHT",
-        "pex": "启用 PEX", "pex-enabled": "启用 PEX", "lsd": "启用本地发现", "lpd-enabled": "启用本地发现",
-        "utp-enabled": "启用 µTP", "queueing_enabled": "启用队列管理", "download-queue-enabled": "启用下载队列",
-        "download-queue-size": "最大同时下载数", "seed-queue-enabled": "启用上传队列", "seed-queue-size": "最大同时上传数",
-        "max_active_downloads": "最大活动下载数", "max_active_uploads": "最大活动上传数", "max_active_torrents": "最大活动种子数",
-        "max_ratio_enabled": "启用分享率限制", "max_ratio": "默认分享率上限", "seedRatioLimited": "启用做种分享率限制",
-        "seedRatioLimit": "默认分享率上限", "rss_processing_enabled": "启用 RSS", "rss_auto_downloading_enabled": "启用 RSS 自动下载",
-        "web_ui_address": "WebUI 监听地址", "web_ui_port": "WebUI 端口", "web_ui_username": "WebUI 用户名",
-        "use_https": "WebUI 使用 HTTPS", "proxy_ip": "代理地址", "proxy_port": "代理端口",
-        "proxy_username": "代理用户名", "proxy_password": "代理密码", "confirm_torrent_deletion": "删除种子前确认",
-        "confirm_torrent_recheck": "重新校验前确认", "start-added-torrents": "自动启动新种子",
-        "trash-original-torrent-files": "删除原始种子文件", "cache-size-mb": "磁盘缓存大小"
-    ]
-    if let label = labels[key] { return label }
-    return key.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
+    if let label = downloaderPreferenceLabels[key] { return label }
+    let normalized = key
+        .replacingOccurrences(of: #"([a-z0-9])([A-Z])"#, with: "$1_$2", options: .regularExpression)
+        .replacingOccurrences(of: "-", with: "_")
+        .lowercased()
+    let tokens = normalized.split(separator: "_").map(String.init).filter { !$0.isEmpty }
+    guard !tokens.isEmpty else { return "高级设置" }
+    let translated = tokens.compactMap { downloaderPreferenceTokenLabels[$0] }
+    guard !translated.isEmpty else { return "其他高级设置" }
+    return translated.joined(separator: "") + (translated.count == tokens.count ? "" : "相关设置")
 }
