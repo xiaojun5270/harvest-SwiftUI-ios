@@ -99,34 +99,27 @@ struct ManagementResultView: View {
     }
 
     @ViewBuilder private func resultField(_ field: ManagementResultField) -> some View {
-        if field.value.count <= 40, !field.value.contains("\n") {
-            LabeledContent(managementFieldLabel(field.key), value: field.value)
-                .textSelection(.enabled)
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(managementFieldLabel(field.key)).font(.caption).foregroundStyle(.secondary)
-                Text(field.value).font(.subheadline).textSelection(.enabled)
+        let value = ManagementResultLocalization.displayValue(field.value, for: field.key)
+        Group {
+            if value.count <= 40, !value.contains("\n") {
+                LabeledContent(managementFieldLabel(field.key), value: value)
+                    .textSelection(.enabled)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(managementFieldLabel(field.key)).font(.caption).foregroundStyle(.secondary)
+                    Text(value).font(.subheadline).textSelection(.enabled)
+                }
             }
+        }
+        .contextMenu {
+            Button("复制内容", systemImage: "doc.on.doc") { copyPrivateText(value) }
+            Button("复制原字段", systemImage: "textformat") { copyPrivateText(field.key + ": " + field.value) }
         }
     }
 }
 
 func managementFieldLabel(_ key: String) -> String {
-    let labels = [
-        "name": "名称", "title": "标题", "text": "内容", "message": "返回信息", "msg": "返回信息",
-        "model": "模型", "prompt_tokens": "输入 Token", "completion_tokens": "输出 Token",
-        "total": "总数", "created": "新增", "updated": "更新", "item_count": "条目数",
-        "last_build": "最后构建", "feed_name": "RSS 源", "feed_id": "源编号",
-        "subscription_id": "订阅编号", "pushed": "已推送", "published_at": "发布时间",
-        "created_at": "创建时间", "status": "状态", "context": "项目状态", "findings": "诊断结果",
-        "sites_total": "站点总数", "sites_enabled": "启用站点", "downloaders_total": "下载器总数",
-        "downloaders_active": "活跃下载器", "schedule_tasks": "计划任务", "rss_feeds": "RSS 源",
-        "rss_subscriptions": "RSS 订阅", "recent_results": "近期执行记录", "level": "级别",
-        "code": "代码", "day": "日期", "daily_limit": "每日额度", "size": "大小（字节）",
-        "link": "详情链接", "category": "分类", "summary": "摘要", "date": "日期",
-        "author": "作者", "description": "描述", "isRead": "已读"
-    ]
-    return labels[key] ?? key
+    ManagementResultLocalization.fieldTitle(key)
 }
 
 enum ManagementFieldKind: Equatable {

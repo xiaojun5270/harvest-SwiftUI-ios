@@ -30,6 +30,8 @@
 		100000000000000000000016 /* AIAnswerDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000018 /* AIAnswerDocument.swift */; };
 		100000000000000000000017 /* AIAnswerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000019 /* AIAnswerView.swift */; };
 		100000000000000000000018 /* ManagementResultDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001A /* ManagementResultDocument.swift */; };
+		100000000000000000000019 /* ManagementResultLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001B /* ManagementResultLocalization.swift */; };
+		10000000000000000000001A /* AIProviderCredentialPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001C /* AIProviderCredentialPolicy.swift */; };
 		10000000000000000000000E /* TDLibKit in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000002 /* TDLibKit */; };
 		B00000000000000000000001 /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* SafariWebExtensionHandler.swift */; };
 		B00000000000000000000002 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* manifest.json */; };
@@ -113,6 +115,8 @@
 		200000000000000000000018 /* AIAnswerDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIAnswerDocument.swift; sourceTree = "<group>"; };
 		200000000000000000000019 /* AIAnswerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIAnswerView.swift; sourceTree = "<group>"; };
 		20000000000000000000001A /* ManagementResultDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagementResultDocument.swift; sourceTree = "<group>"; };
+		20000000000000000000001B /* ManagementResultLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagementResultLocalization.swift; sourceTree = "<group>"; };
+		20000000000000000000001C /* AIProviderCredentialPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProviderCredentialPolicy.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000002 /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = manifest.json; sourceTree = "<group>"; };
@@ -199,6 +203,8 @@
 				200000000000000000000018 /* AIAnswerDocument.swift */,
 				200000000000000000000019 /* AIAnswerView.swift */,
 				20000000000000000000001A /* ManagementResultDocument.swift */,
+				20000000000000000000001B /* ManagementResultLocalization.swift */,
+				20000000000000000000001C /* AIProviderCredentialPolicy.swift */,
 				200000000000000000000007 /* Assets.xcassets */,
 				200000000000000000000008 /* Info.plist */,
 				20000000000000000000000D /* PrivacyInfo.xcprivacy */,
@@ -441,6 +447,8 @@
 				100000000000000000000016 /* AIAnswerDocument.swift in Sources */,
 				100000000000000000000017 /* AIAnswerView.swift in Sources */,
 				100000000000000000000018 /* ManagementResultDocument.swift in Sources */,
+				100000000000000000000019 /* ManagementResultLocalization.swift in Sources */,
+				10000000000000000000001A /* AIProviderCredentialPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

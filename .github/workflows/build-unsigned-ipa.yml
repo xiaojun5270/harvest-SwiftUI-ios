@@ -39,6 +39,8 @@ jobs:
           swiftc -parse-as-library \
             Harvest/AIAnswerDocument.swift \
             Harvest/ManagementResultDocument.swift \
+            Harvest/ManagementResultLocalization.swift \
+            Harvest/AIProviderCredentialPolicy.swift \
             Tests/AIAnswerDocumentChecks.swift \
             -o "$RUNNER_TEMP/harvest-ai-answer-checks"
           "$RUNNER_TEMP/harvest-ai-answer-checks"

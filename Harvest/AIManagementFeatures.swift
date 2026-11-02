@@ -68,6 +68,7 @@ final class AIManagementModel: ObservableObject {
     @Published var loading = false
     @Published var sending = false
     @Published var working = false
+    @Published var providerKeyConfigured: Bool? = nil
     @Published var error = ""
     @Published var usage: [String: Any] = [:]
     @Published var diagnosis: [String: Any]?
@@ -393,6 +394,7 @@ private struct AIConfigurationView: View {
     @State private var confirmRestore = false
     @State private var selectedPreset: AIServicePreset?
     @State private var validationError = ""
+    @State private var editingAPIKey = false
     private let fields: [ManagementField] = [
         .init(key: "enabled", label: "启用 AI", kind: .toggle, defaultValue: false),
         .init(key: "provider", label: "服务类型", defaultValue: "openai", required: true),
@@ -416,7 +418,10 @@ private struct AIConfigurationView: View {
                     Menu("预设模型") { ForEach(preset.models, id: \.self) { name in Button(name) { values["model"] = name } } }
                 }
             }
-            Section("服务配置") { ForEach(fields) { ManagementFieldInput(field: $0, values: $values) } }
+            Section("服务配置") {
+                ForEach(fields.filter { $0.key != "api_key" }) { ManagementFieldInput(field: $0, values: $values) }
+            }
+            credentialSection
             if !validationError.isEmpty { Text(validationError).foregroundStyle(HarvestTheme.coral) }
             Section {
                 Button("保存配置") { Task { await save() } }
@@ -441,24 +446,56 @@ private struct AIConfigurationView: View {
                     let defaults = try? managementFormPayload([:], fields: fields.filter { !$0.required })
                     var body = defaults ?? [:]
                     body["provider"] = "openai"
-                    if await model.operation(app, title: "恢复默认配置", path: ManagementAPI.aiProviders, method: .put, body: body, showResult: false) != nil { await load(force: true) }
+                    if await model.operation(app, title: "恢复默认配置", path: ManagementAPI.aiProviders, method: .put, body: body, showResult: false) != nil {
+                        model.providerKeyConfigured = nil
+                        await load(force: true)
+                    }
                 }
             }
+        }
+    }
+
+    private var credentialSection: some View {
+        Section {
+            if let configured = model.providerKeyConfigured {
+                Label(configured ? "API Key 已配置" : "尚未配置 API Key",
+                      systemImage: configured ? "checkmark.shield.fill" : "key")
+                    .foregroundStyle(configured ? HarvestTheme.green : Color.secondary)
+            } else {
+                Label("使用服务端保存的密钥", systemImage: "key")
+                    .foregroundStyle(.secondary)
+            }
+            if editingAPIKey {
+                ManagementFieldInput(field: ManagementField(key: "api_key", label: "新的 API Key", kind: .secret), values: $values)
+                Button("取消更换") {
+                    values["api_key"] = ""
+                    editingAPIKey = false
+                }
+            } else {
+                Button(model.providerKeyConfigured == true ? "更换密钥" : "设置或更换密钥") { editingAPIKey = true }
+            }
+        } header: {
+            Text("模型访问密钥")
+        } footer: {
+            Text("密钥不会回显。修改地址、模型等配置时无需重复填写；留空保留服务端密钥。无需密钥的内网服务可以留空。")
         }
     }
 
     @MainActor private func load(force: Bool = false) async {
         guard force || !loaded else { return }
         do {
-            values = try await model.request(app, path: ManagementAPI.aiProviders)
+            let response = try await model.request(app, path: ManagementAPI.aiProviders)
+            model.providerKeyConfigured = AIProviderCredentialPolicy.configuredState(in: response, previous: model.providerKeyConfigured)
+            values = response
             values["api_key"] = ""
+            editingAPIKey = model.providerKeyConfigured == false
             loaded = true
         } catch { model.error = error.localizedDescription }
     }
 
     @MainActor private func save() async {
         do {
-            let body = try managementFormPayload(values, fields: fields)
+            let body = AIProviderCredentialPolicy.preservingSavedKey(in: try managementFormPayload(values, fields: fields))
             let temperature = body["temperature"] as? Double ?? 0
             let timeout = body["timeout_seconds"] as? Int ?? 0
             guard (0...2).contains(temperature), (1...120).contains(timeout),
@@ -472,8 +509,12 @@ private struct AIConfigurationView: View {
                 }
             }
             if let saved = await model.operation(app, title: "保存 AI 配置", path: ManagementAPI.aiProviders, method: .put, body: body, showResult: false) {
+                model.providerKeyConfigured = AIProviderCredentialPolicy.configuredState(
+                    in: saved, submittedKey: body["api_key"] as? String, previous: model.providerKeyConfigured
+                )
                 values = saved
                 values["api_key"] = ""
+                editingAPIKey = false
                 validationError = ""
             }
         } catch { validationError = error.localizedDescription }

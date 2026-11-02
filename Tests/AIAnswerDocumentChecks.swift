@@ -12,7 +12,9 @@ struct AIAnswerDocumentChecks {
         checkNumericRanges()
         checkOrdinaryText()
         checkResultDocuments()
-        print("AI 回答排版与项目状态回归检查通过")
+        checkResultLocalization()
+        checkProviderKeyPolicy()
+        print("AI 回答、项目状态与配置回归检查通过")
     }
 
     private static func checkParagraphsAndHeadings() {
@@ -118,5 +120,43 @@ struct AIAnswerDocumentChecks {
         precondition(ManagementResultDocument([Any]()).isEmptyCollection)
         let strings = ManagementResultDocument(["提示一", "提示二"])
         precondition(strings.sections.map { $0.fields[0].value } == ["提示一", "提示二"])
+    }
+
+    private static func checkResultLocalization() {
+        precondition(ManagementResultLocalization.fieldTitle("sites_total") == "站点总数")
+        precondition(ManagementResultLocalization.fieldTitle("sitesTotal") == "站点总数")
+        precondition(ManagementResultLocalization.fieldTitle("downloaders") == "下载器")
+        precondition(ManagementResultLocalization.fieldTitle("downloadersActive") == "活跃下载器")
+        precondition(ManagementResultLocalization.fieldTitle("RSSFeeds") == "订阅源")
+        precondition(ManagementResultLocalization.fieldTitle("isRead") == "是否已读")
+        precondition(ManagementResultLocalization.fieldTitle("recent_results") == "近期执行记录")
+        precondition(ManagementResultLocalization.fieldTitle("第 1 项") == "第 1 项")
+        precondition(ManagementResultLocalization.fieldTitle("unrecognized_backend_key") == "其他信息")
+        precondition(ManagementResultLocalization.displayValue("success", for: "status") == "成功")
+        precondition(ManagementResultLocalization.displayValue("warning", for: "level") == "警告")
+        precondition(ManagementResultLocalization.displayValue("offline", for: "connectionStatus") == "离线")
+        precondition(ManagementResultLocalization.displayValue("false", for: "enabled") == "否")
+        precondition(ManagementResultLocalization.displayValue("0", for: "rss_feeds") == "0")
+        precondition(ManagementResultLocalization.displayValue("1", for: "downloaders_active") == "1")
+        precondition(ManagementResultLocalization.displayValue("success", for: "name") == "success")
+        precondition(ManagementResultLocalization.displayValue("qBittorrent", for: "name") == "qBittorrent")
+        precondition(ManagementResultLocalization.displayValue("gpt-4.1", for: "model") == "gpt-4.1")
+    }
+
+    private static func checkProviderKeyPolicy() {
+        let update = AIProviderCredentialPolicy.preservingSavedKey(in: ["api_key": " \n", "model": "local-model"])
+        precondition(update["api_key"] == nil)
+        precondition(update["model"] as? String == "local-model")
+        precondition(AIProviderCredentialPolicy.preservingSavedKey(in: ["api_key": NSNull()])["api_key"] == nil)
+        let replacement = AIProviderCredentialPolicy.preservingSavedKey(in: ["api_key": " test-key \n"])
+        precondition(replacement["api_key"] as? String == "test-key")
+        precondition(AIProviderCredentialPolicy.configuredState(in: ["api_key": "***masked***"]) == true)
+        precondition(AIProviderCredentialPolicy.configuredState(in: ["has_api_key": true]) == true)
+        precondition(AIProviderCredentialPolicy.configuredState(in: ["hasApiKey": "false"], previous: true) == false)
+        precondition(AIProviderCredentialPolicy.configuredState(in: ["api_key": ""]) == nil)
+        precondition(AIProviderCredentialPolicy.configuredState(in: ["api_key": ""], previous: true) == true)
+        precondition(AIProviderCredentialPolicy.configuredState(in: [:], submittedKey: "test-key") == true)
+        precondition(AIProviderCredentialPolicy.configuredState(in: ["has_api_key": false], submittedKey: "test-key") == false)
+        precondition(AIProviderCredentialPolicy.configuredState(in: [:], submittedKey: " \n") == nil)
     }
 }
