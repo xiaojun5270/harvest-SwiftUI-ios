@@ -39,6 +39,7 @@ struct AIChatMessage: Identifiable {
     let failed: Bool
     let createdAt: String
     let context: [String: Any]
+    let formattedAnswer: AIAnswerDocument?
 
     init(id: String = UUID().uuidString, role: String, content: String, failed: Bool = false,
          createdAt: String = "", context: [String: Any] = [:]) {
@@ -48,6 +49,7 @@ struct AIChatMessage: Identifiable {
         self.failed = failed
         self.createdAt = createdAt
         self.context = context
+        self.formattedAnswer = role == "assistant" && !failed ? AIAnswerDocument(content) : nil
     }
     init(_ row: [String: Any]) {
         self.init(id: String(row.int("id") ?? stableIdentifier(row.string("created_at") ?? "", row.string("content") ?? "")),
@@ -144,7 +146,6 @@ final class AIManagementModel: ObservableObject {
         sending = true
         error = ""
         messages.append(AIChatMessage(role: "user", content: text))
-        let feedback = app.beginManualTask("AI 正在回答")
         defer { sending = false }
         do {
             var body = ["message": text]
@@ -154,15 +155,11 @@ final class AIManagementModel: ObservableObject {
                 throw APIError(statusCode: 0, message: "AI 未返回回答，请检查模型配置")
             }
             messages.append(AIChatMessage(role: "assistant", content: answer, context: response.dict("context") ?? [:]))
-            app.finishManualTask(feedback, success: true, message: "AI 回答完成")
             await loadUsage(app)
         } catch {
-            if isRequestCancellation(error) { app.cancelManualTask(feedback) }
-            else {
-                self.error = error.localizedDescription
-                messages.append(AIChatMessage(role: "assistant", content: error.localizedDescription, failed: true))
-                app.finishManualTask(feedback, success: false, message: error.localizedDescription)
-            }
+            guard !isRequestCancellation(error) else { return }
+            self.error = error.localizedDescription
+            messages.append(AIChatMessage(role: "assistant", content: error.localizedDescription, failed: true))
         }
     }
 
@@ -287,24 +284,40 @@ struct AIManagementView: View {
     }
 
     private func messageRow(_ message: AIChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(message.role == "user" ? "我" : "AI 助手").font(.caption.weight(.semibold))
+                Label(message.role == "user" ? "我" : "AI 助手", systemImage: message.role == "user" ? "person.crop.circle" : "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(message.role == "user" ? HarvestTheme.blue : HarvestTheme.purple)
                 Spacer()
                 if !message.createdAt.isEmpty { Text(message.createdAt).font(.caption2).foregroundStyle(.secondary) }
+                Button { copyPrivateText(message.content) } label: {
+                    Image(systemName: "doc.on.doc").font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("复制回答原文")
             }
-            Text(markdownAttributedString(message.content)).font(.subheadline).textSelection(.enabled)
-                .foregroundStyle(message.failed ? HarvestTheme.coral : Color.primary)
+            if let document = message.formattedAnswer {
+                AIAnswerView(document: document)
+            } else {
+                Text(message.content).font(.subheadline).lineSpacing(4).textSelection(.enabled)
+                    .foregroundStyle(message.failed ? HarvestTheme.coral : Color.primary)
+            }
             if !message.context.isEmpty {
-                NavigationLink("查看本次项目状态") {
-                    ManagementResultView(result: ManagementResult(title: "项目状态", values: message.context))
-                }.font(.caption)
+                Divider()
+                Button {
+                    model.result = ManagementResult(title: "本次项目状态", values: message.context)
+                } label: {
+                    Label("查看本次项目状态", systemImage: "chart.bar.doc.horizontal")
+                        .font(.caption)
+                }
             }
             if message.failed, let prompt = retryPrompt(for: message) {
                 Button("重试") { Task { await model.send(app, message: prompt, system: system) } }.disabled(model.sending)
             }
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(message.role == "user" ? HarvestTheme.blue.opacity(0.07) : Color(uiColor: .secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: 12))

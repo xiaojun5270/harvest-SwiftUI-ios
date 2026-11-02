@@ -1,5 +1,4 @@
 import Foundation
-import CoreFoundation
 import SwiftUI
 import UIKit
 
@@ -56,7 +55,12 @@ struct ManagementRecord: Identifiable {
 struct ManagementResult: Identifiable {
     let id = UUID()
     let title: String
-    let values: Any
+    let document: ManagementResultDocument
+
+    init(title: String, values: Any) {
+        self.title = title
+        self.document = ManagementResultDocument(managementPayload(values))
+    }
 }
 
 /// Readable server responses without exposing raw JSON or credentials.
@@ -67,20 +71,24 @@ struct ManagementResultView: View {
     var body: some View {
         NavigationStack {
             List {
-                let rows = managementRows(result.values)
-                if !rows.isEmpty {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                if result.document.sections.isEmpty {
+                    if result.document.isEmptyCollection {
+                        ContentUnavailableView("暂无匹配结果", systemImage: "doc.text.magnifyingglass")
+                    } else {
+                        Label("操作已完成", systemImage: "checkmark.circle")
+                    }
+                } else {
+                    ForEach(result.document.sections) { section in
                         Section {
-                            resultFields(row)
+                            ForEach(section.fields) { field in
+                                resultField(field)
+                            }
+                        } header: {
+                            if !section.titleKeys.isEmpty {
+                                Text(section.titleKeys.map(managementFieldLabel).joined(separator: " · "))
+                            }
                         }
                     }
-                } else if let root = managementPayload(result.values) as? [String: Any] {
-                    if root.isEmpty { Label("操作已完成", systemImage: "checkmark.circle") }
-                    else { resultFields(root) }
-                } else if managementPayload(result.values) is [Any] {
-                    ContentUnavailableView("暂无匹配结果", systemImage: "doc.text.magnifyingglass")
-                } else {
-                    Text(String(describing: managementPayload(result.values))).textSelection(.enabled)
                 }
             }
             .navigationTitle(result.title)
@@ -90,26 +98,14 @@ struct ManagementResultView: View {
         .presentationDetents([.large])
     }
 
-    @ViewBuilder private func resultFields(_ row: [String: Any]) -> some View {
-        ForEach(row.keys.sorted(), id: \.self) { key in
-            if !["api_key", "password", "token", "rss", "torrent_url"].contains(key) {
-                if let text = row[key] as? String, !text.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(managementFieldLabel(key)).font(.caption).foregroundStyle(.secondary)
-                        Text(text).font(.subheadline).textSelection(.enabled)
-                    }
-                } else if let number = row[key] as? NSNumber {
-                    let isBoolean = CFGetTypeID(number) == CFBooleanGetTypeID()
-                    LabeledContent(managementFieldLabel(key), value: isBoolean ? (number.boolValue ? "是" : "否") : number.stringValue)
-                } else if let nested = row[key] as? [String: Any] {
-                    NavigationLink(managementFieldLabel(key)) {
-                        ManagementResultView(result: ManagementResult(title: managementFieldLabel(key), values: nested))
-                    }
-                } else if let list = row[key] as? [[String: Any]], !list.isEmpty {
-                    NavigationLink("\(managementFieldLabel(key)) · \(list.count) 项") {
-                        ManagementResultView(result: ManagementResult(title: managementFieldLabel(key), values: list))
-                    }
-                }
+    @ViewBuilder private func resultField(_ field: ManagementResultField) -> some View {
+        if field.value.count <= 40, !field.value.contains("\n") {
+            LabeledContent(managementFieldLabel(field.key), value: field.value)
+                .textSelection(.enabled)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(managementFieldLabel(field.key)).font(.caption).foregroundStyle(.secondary)
+                Text(field.value).font(.subheadline).textSelection(.enabled)
             }
         }
     }
