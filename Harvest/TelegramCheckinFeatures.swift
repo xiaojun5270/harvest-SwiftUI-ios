@@ -136,6 +136,7 @@ struct TelegramCheckinBot: Codable, Identifiable, Equatable {
     var resolvedTitle: String?
     var lastRunAt: Foundation.Date?
     var lastAutomaticRunAt: Foundation.Date?
+    var lastSuccessfulRunAt: Foundation.Date?
     var lastStatus: TelegramCheckinRunStatus = .idle
     var lastResponse = ""
 
@@ -312,9 +313,24 @@ final class TelegramCheckinStore: ObservableObject {
         bot.scheduleMinute = max(0, min(1_439, bot.scheduleMinute))
         bot.weekdays = Array(Set(bot.weekdays.filter { (1...7).contains($0) })).sorted()
         if let index = bots.firstIndex(where: { $0.id == bot.id }) {
-            if bots[index].normalizedUsername.caseInsensitiveCompare(bot.normalizedUsername) != .orderedSame {
+            let current = bots[index]
+            if current.normalizedUsername.caseInsensitiveCompare(bot.normalizedUsername) == .orderedSame {
+                // The editor holds a draft that may predate a completed or in-flight run.
+                bot.resolvedChatID = current.resolvedChatID
+                bot.resolvedTitle = current.resolvedTitle
+                bot.lastRunAt = current.lastRunAt
+                bot.lastAutomaticRunAt = current.lastAutomaticRunAt
+                bot.lastSuccessfulRunAt = current.lastSuccessfulRunAt
+                bot.lastStatus = current.lastStatus
+                bot.lastResponse = current.lastResponse
+            } else {
                 bot.resolvedChatID = nil
                 bot.resolvedTitle = nil
+                bot.lastRunAt = nil
+                bot.lastAutomaticRunAt = nil
+                bot.lastSuccessfulRunAt = nil
+                bot.lastStatus = .idle
+                bot.lastResponse = ""
             }
             bots[index] = bot
         } else {
@@ -356,8 +372,32 @@ final class TelegramCheckinStore: ObservableObject {
         }
     }
 
-    func markAutomaticAttempt(id: UUID, at date: Foundation.Date) {
-        updateBot(id: id) { $0.lastAutomaticRunAt = date }
+    func isDueForAutomaticRun(id: UUID, at date: Foundation.Date) -> Bool {
+        guard let bot = bot(id: id) else { return false }
+        return TelegramCheckinSchedulePolicy.isDue(
+            isEnabled: bot.isEnabled,
+            scheduleEnabled: bot.scheduleEnabled,
+            scheduleMinute: bot.scheduleMinute,
+            weekdays: bot.weekdays,
+            lastAutomaticRunAt: bot.lastAutomaticRunAt,
+            lastSuccessfulRunAt: bot.lastSuccessfulRunAt,
+            now: date,
+            calendar: .current
+        )
+    }
+
+    func claimAutomaticRun(id: UUID, at date: Foundation.Date) throws {
+        guard let index = bots.firstIndex(where: { $0.id == id }),
+              isDueForAutomaticRun(id: id, at: date) else {
+            throw TelegramCheckinError.notDue
+        }
+        let previousAttempt = bots[index].lastAutomaticRunAt
+        bots[index].lastAutomaticRunAt = date
+        // This synchronous write and eligibility check run on MainActor without an await between them.
+        guard persist() else {
+            bots[index].lastAutomaticRunAt = previousAttempt
+            throw TelegramCheckinError.persistenceFailed
+        }
     }
 
     @discardableResult
@@ -375,6 +415,7 @@ final class TelegramCheckinStore: ObservableObject {
         bot.lastRunAt = finishedAt
         bot.lastStatus = status
         bot.lastResponse = response
+        if status.isSuccessful { bot.lastSuccessfulRunAt = finishedAt }
         if trigger == .scheduled { bot.lastAutomaticRunAt = startedAt }
         if let index = bots.firstIndex(where: { $0.id == id }) { bots[index] = bot }
         let record = TelegramCheckinHistory(
@@ -421,22 +462,48 @@ final class TelegramCheckinStore: ObservableObject {
               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         bots = snapshot.bots
         history = snapshot.history.sorted { $0.createdAt > $1.createdAt }
+        var migrated = false
+        for index in bots.indices {
+            let bot = bots[index]
+            let latestSuccess = history.first {
+                $0.botID == bot.id && $0.status.isSuccessful
+                    && $0.username.caseInsensitiveCompare(bot.normalizedUsername) == .orderedSame
+            }?.createdAt
+            let successfulDates = [bot.lastSuccessfulRunAt, latestSuccess,
+                                   bot.lastStatus.isSuccessful ? bot.lastRunAt : nil].compactMap { $0 }
+            let lastSuccess = successfulDates.max()
+            if lastSuccess != bot.lastSuccessfulRunAt {
+                bots[index].lastSuccessfulRunAt = lastSuccess
+                migrated = true
+            }
+        }
         if let savedStatistics = snapshot.statistics {
             statistics = savedStatistics
         } else {
-            var migrated = TelegramCheckinStatistics()
-            for record in history.reversed() { migrated.include(record) }
-            statistics = migrated
-            persist()
+            var counters = TelegramCheckinStatistics()
+            for record in history.reversed() { counters.include(record) }
+            statistics = counters
+            migrated = true
         }
+        if migrated { persist() }
     }
 
-    private func persist() {
-        guard let fileURL,
-              let data = try? JSONEncoder().encode(
+    @discardableResult
+    private func persist() -> Bool {
+        guard let fileURL else {
+            recordAppLog(.error, "保存 TG 签到记录失败：本地目录不可用")
+            return false
+        }
+        do {
+            let data = try JSONEncoder().encode(
                 Snapshot(bots: bots, history: history, statistics: statistics)
-              ) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+            )
+            try data.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            recordAppLog(.error, "保存 TG 签到记录失败：\(error.localizedDescription)")
+            return false
+        }
     }
 }
 
@@ -472,6 +539,8 @@ enum TelegramCheckinError: LocalizedError {
     case notAuthorized
     case botNotFound
     case alreadyRunning
+    case notDue
+    case persistenceFailed
     case invalidConfiguration(String)
 
     var errorDescription: String? {
@@ -479,6 +548,8 @@ enum TelegramCheckinError: LocalizedError {
         case .notAuthorized: "请先登录 Telegram"
         case .botNotFound: "TG Bot 配置不存在"
         case .alreadyRunning: "该 Bot 正在执行签到"
+        case .notDue: "未到定时时间，或今日已执行签到"
+        case .persistenceFailed: "无法保存签到记录，已暂停本次自动签到，请检查本机存储空间"
         case .invalidConfiguration(let message): message
         }
     }
@@ -533,6 +604,7 @@ final class TelegramSessionController: ObservableObject {
     private var isApplyingParameters = false
     private var pendingPhone: String?
     private var schedulerTask: Task<Void, Never>?
+    private var isCheckingDueBots = false
     private var pendingResponses: [UUID: PendingResponse] = [:]
     private var recentResponses: [Int64: [RecentResponse]] = [:]
     private weak var notificationAppState: AppState?
@@ -751,6 +823,10 @@ final class TelegramSessionController: ObservableObject {
         }
 
         let startedAt = Foundation.Date()
+        try Task.checkCancellation()
+        if trigger == .scheduled {
+            try TelegramCheckinStore.shared.claimAutomaticRun(id: botID, at: startedAt)
+        }
         runningBotIDs.insert(botID)
         TelegramCheckinStore.shared.beginRun(id: botID)
         defer { runningBotIDs.remove(botID) }
@@ -1600,20 +1676,18 @@ final class TelegramSessionController: ObservableObject {
     }
 
     private func runDueBots() async {
-        guard isReady else { return }
+        guard isReady, !Task.isCancelled, !isCheckingDueBots else { return }
+        isCheckingDueBots = true
+        defer { isCheckingDueBots = false }
         let now = Foundation.Date()
-        let calendar = Calendar.current
-        let weekday = calendar.component(.weekday, from: now)
-        let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
-        let dueIDs = TelegramCheckinStore.shared.bots.filter { bot in
-            guard bot.isEnabled, bot.scheduleEnabled, bot.weekdays.contains(weekday),
-                  minute >= bot.scheduleMinute, !runningBotIDs.contains(bot.id) else { return false }
-            guard let lastRun = bot.lastAutomaticRunAt else { return true }
-            return !calendar.isDate(lastRun, inSameDayAs: now)
+        let store = TelegramCheckinStore.shared
+        let dueIDs = store.bots.filter { bot in
+            !runningBotIDs.contains(bot.id) && store.isDueForAutomaticRun(id: bot.id, at: now)
         }.map(\.id)
 
         for id in dueIDs {
-            TelegramCheckinStore.shared.markAutomaticAttempt(id: id, at: now)
+            guard isReady, !Task.isCancelled else { break }
+            // run() rechecks the current state and persists a claim before sending any command.
             _ = try? await run(botID: id, trigger: .scheduled)
         }
     }
@@ -2413,7 +2487,7 @@ private struct TelegramBotEditorSheet: View {
                 } header: {
                     Text("定时签到")
                 } footer: {
-                    Text("由 App 在前台检查执行；iOS 挂起或终止 App 后不能保证准时运行。")
+                    Text("到点后每天自动执行一次；当天手动签到成功后不再自动执行。错过时间会在下次打开时补签一次，失败可手动重试。iOS 后台不能保证准时运行。")
                 }
 
                 if let validationMessage {

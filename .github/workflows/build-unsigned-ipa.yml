@@ -45,6 +45,15 @@ jobs:
             -o "$RUNNER_TEMP/harvest-ai-answer-checks"
           "$RUNNER_TEMP/harvest-ai-answer-checks"
 
+      - name: Check Telegram daily scheduling
+        run: |
+          set -euo pipefail
+          swiftc -parse-as-library \
+            Harvest/TelegramCheckinSchedulePolicy.swift \
+            Tests/TelegramCheckinScheduleChecks.swift \
+            -o "$RUNNER_TEMP/harvest-telegram-schedule-checks"
+          "$RUNNER_TEMP/harvest-telegram-schedule-checks"
+
       - name: Build unsigned app
         env:
           DERIVED_DATA: ${{ runner.temp }}/HarvestDerivedData
