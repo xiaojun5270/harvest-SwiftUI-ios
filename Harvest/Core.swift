@@ -2361,6 +2361,15 @@ final class AppState: ObservableObject {
         return UserProfile(payload)
     }
 
+    func realtimeAccessToken() async throws -> String {
+        try Task.checkCancellation()
+        if !refreshToken.isEmpty, RealtimeTokenPolicy.needsRefresh(accessToken) {
+            try await refreshAccessToken()
+        }
+        try Task.checkCancellation()
+        return accessToken
+    }
+
     private func refreshAccessToken() async throws {
         if let accessTokenRefresh {
             try await accessTokenRefresh.task.value

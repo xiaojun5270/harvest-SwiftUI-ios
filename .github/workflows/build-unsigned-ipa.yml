@@ -54,6 +54,15 @@ jobs:
             -o "$RUNNER_TEMP/harvest-telegram-schedule-checks"
           "$RUNNER_TEMP/harvest-telegram-schedule-checks"
 
+      - name: Check foreground data recovery
+        run: |
+          set -euo pipefail
+          swiftc -parse-as-library \
+            Harvest/ForegroundRecoveryState.swift \
+            Tests/ForegroundRecoveryChecks.swift \
+            -o "$RUNNER_TEMP/harvest-foreground-recovery-checks"
+          "$RUNNER_TEMP/harvest-foreground-recovery-checks"
+
       - name: Build unsigned app
         env:
           DERIVED_DATA: ${{ runner.temp }}/HarvestDerivedData

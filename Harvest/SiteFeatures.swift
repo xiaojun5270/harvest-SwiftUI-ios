@@ -1944,6 +1944,10 @@ struct SitesView: View {
             isVisible = true
         }
         .onDisappear { isVisible = false }
+        .recoverDataAfterBackground(onSuspend: {}) { duration in
+            guard duration >= 30 else { return }
+            await model.load(appState, background: true)
+        }
         .task(id: appState.sessionGeneration) {
             model.prepareForSessionLoad(appState.sessionGeneration, server: appState.baseURL)
             await model.loadOnAppear(appState)

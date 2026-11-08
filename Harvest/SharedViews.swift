@@ -2810,7 +2810,55 @@ struct LoadingState: View {
     }
 }
 
+@MainActor
+private struct ForegroundDataRecoveryModifier: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var recovery = ForegroundRecoveryState()
+    @State private var resumeDuration: TimeInterval?
+    @State private var recoveryGeneration = 0
+    let onSuspend: @MainActor () -> Void
+    let onResume: @MainActor (TimeInterval) async -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                recovery.appear()
+                if scenePhase == .background, recovery.enterBackground(at: Date()) {
+                    onSuspend()
+                }
+            }
+            .onDisappear {
+                recovery.disappear()
+                resumeDuration = nil
+                recoveryGeneration &+= 1
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background, recovery.enterBackground(at: Date()) {
+                    resumeDuration = nil
+                    recoveryGeneration &+= 1
+                    onSuspend()
+                } else if phase == .active,
+                          let duration = recovery.enterForeground(at: Date()) {
+                    resumeDuration = duration
+                    recoveryGeneration &+= 1
+                }
+            }
+            .task(id: recoveryGeneration) {
+                guard recovery.isVisible, let resumeDuration, !Task.isCancelled else { return }
+                await onResume(resumeDuration)
+            }
+    }
+}
+
 extension View {
+    @MainActor
+    func recoverDataAfterBackground(
+        onSuspend: @escaping @MainActor () -> Void,
+        onResume: @escaping @MainActor (TimeInterval) async -> Void
+    ) -> some View {
+        modifier(ForegroundDataRecoveryModifier(onSuspend: onSuspend, onResume: onResume))
+    }
+
     @ViewBuilder
     func harvestNavigationChrome() -> some View {
         if #available(iOS 26.0, *) {

@@ -1009,6 +1009,7 @@ final class DownloadsViewModel: ObservableObject {
     @Published private(set) var speedHistory: [DownloaderSpeedSample] = []
     @Published private var derived = TorrentDerivedState()
     private var speedWatchTask: Task<Void, Never>?
+    private var speedWatchTaskID: UUID?
     private var downloaderWatchTasks: [Int: Task<Void, Never>] = [:]
     private var downloaderWatchTokens: [Int: UUID] = [:]
     private var downloaderWatchSignatures: [Int: String] = [:]
@@ -1017,7 +1018,9 @@ final class DownloadsViewModel: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private var cacheWriteTask: Task<Void, Never>?
     private var statusBootstrapTask: Task<Void, Never>?
+    private var statusBootstrapTaskID: UUID?
     private var countRefreshTask: Task<Void, Never>?
+    private var countRefreshTaskID: UUID?
     private var lastCountRefreshAt: Date?
     private var lastSpeedSampleAt: Date?
     private var filterRebuildTask: Task<Void, Never>?
@@ -1832,11 +1835,35 @@ final class DownloadsViewModel: ObservableObject {
 
     func stopWatching() {
         isViewActive = false
+        cancelStatusRefreshes()
+        stopActiveWatching(clearRemaining: true)
+    }
+
+    func suspendDataUpdatesForBackground() {
+        cancelStatusRefreshes()
+        // Pause the active-page countdown too. Background time must not permanently pause refreshing.
+        stopActiveWatching(clearRemaining: true)
+        recordAppLog(.info, "下载器进入后台，已停止实时连接和刷新倒计时")
+    }
+
+    func resumeDataUpdates(_ appState: AppState) {
+        guard isViewActive, UIApplication.shared.applicationState != .background else { return }
+        if refreshEnabled && !refreshPaused {
+            beginWatching(appState)
+            scheduleCountRefresh(appState, force: true)
+            recordAppLog(.info, "下载器返回前台，正在恢复实时数据连接")
+        } else {
+            recordAppLog(.info, "下载器返回前台，保留暂停或关闭自动刷新的设置")
+        }
+    }
+
+    private func cancelStatusRefreshes() {
         statusBootstrapTask?.cancel()
         statusBootstrapTask = nil
+        statusBootstrapTaskID = nil
         countRefreshTask?.cancel()
         countRefreshTask = nil
-        stopActiveWatching(clearRemaining: true)
+        countRefreshTaskID = nil
     }
 
     func updateRefreshConfiguration(
@@ -1875,9 +1902,11 @@ final class DownloadsViewModel: ObservableObject {
 
     private func beginWatching(_ appState: AppState) {
         stopActiveWatching(clearRemaining: false)
-        guard isViewActive, refreshEnabled, !refreshPaused else { return }
+        guard isViewActive, refreshEnabled, !refreshPaused,
+              UIApplication.shared.applicationState != .background else { return }
         statusBootstrapTask?.cancel()
         statusBootstrapTask = nil
+        statusBootstrapTaskID = nil
         isWatching = true
         refreshDeadline = Date().addingTimeInterval(TimeInterval(refreshDuration * 60))
         reconcileWatching(appState)
@@ -1886,18 +1915,27 @@ final class DownloadsViewModel: ObservableObject {
         countdownTask = Task {
             do { try await Task.sleep(for: .seconds(duration * 60)) }
             catch { return }
-            guard let model = reference.value, model.isWatching else { return }
+            guard !Task.isCancelled, let model = reference.value, model.isWatching else { return }
             model.refreshPaused = true
             model.stopActiveWatching(clearRemaining: true)
         }
     }
 
     private func scheduleStatusBootstrap(_ appState: AppState) {
-        guard statusBootstrapTask == nil, !isWatching else { return }
+        guard statusBootstrapTask == nil, !isWatching,
+              UIApplication.shared.applicationState != .background else { return }
         let baseURL = appState.baseURL
         let token = appState.accessToken
         let reference = WeakReference(self)
+        let taskID = UUID()
+        statusBootstrapTaskID = taskID
         statusBootstrapTask = Task {
+            defer {
+                if reference.value?.statusBootstrapTaskID == taskID {
+                    reference.value?.statusBootstrapTask = nil
+                    reference.value?.statusBootstrapTaskID = nil
+                }
+            }
             let event = await withTaskGroup(of: DownloaderSpeedEventSnapshot.self) { group in
                 group.addTask {
                     do {
@@ -1928,19 +1966,26 @@ final class DownloadsViewModel: ObservableObject {
             }
             guard let model = reference.value, !Task.isCancelled else { return }
             if let event { model.applyDownloaderSpeedEvent(event, appState: appState) }
-            model.statusBootstrapTask = nil
         }
     }
 
     private func scheduleCountRefresh(_ appState: AppState, force: Bool = false) {
-        guard countRefreshTask == nil else { return }
+        guard countRefreshTask == nil, UIApplication.shared.applicationState != .background else { return }
         if !force,
            let lastCountRefreshAt,
            Date().timeIntervalSince(lastCountRefreshAt) < TimeInterval(max(5, refreshInterval)) {
             return
         }
         let reference = WeakReference(self)
+        let taskID = UUID()
+        countRefreshTaskID = taskID
         countRefreshTask = Task {
+            defer {
+                if reference.value?.countRefreshTaskID == taskID {
+                    reference.value?.countRefreshTask = nil
+                    reference.value?.countRefreshTaskID = nil
+                }
+            }
             if force {
                 do { try await Task.sleep(for: .milliseconds(350)) }
                 catch { return }
@@ -1959,7 +2004,6 @@ final class DownloadsViewModel: ObservableObject {
             }
             guard !candidates.isEmpty else {
                 model.lastCountRefreshAt = Date()
-                model.countRefreshTask = nil
                 return
             }
             for candidate in candidates {
@@ -1974,6 +2018,7 @@ final class DownloadsViewModel: ObservableObject {
                     let snapshotCounts = await Task.detached(priority: .utility) {
                         downloaderSnapshotCounts(response.value)
                     }.value
+                    guard !Task.isCancelled else { return }
                     let receivedCounts = model.applyReportedDownloaderStatus(
                         raw,
                         snapshotCounts: snapshotCounts,
@@ -1992,8 +2037,7 @@ final class DownloadsViewModel: ObservableObject {
                     }
                 }
             }
-            model.lastCountRefreshAt = Date()
-            model.countRefreshTask = nil
+            if !Task.isCancelled { model.lastCountRefreshAt = Date() }
         }
     }
 
@@ -2083,6 +2127,7 @@ final class DownloadsViewModel: ObservableObject {
         countdownTask = nil
         speedWatchTask?.cancel()
         speedWatchTask = nil
+        speedWatchTaskID = nil
         downloaderWatchTasks.values.forEach { $0.cancel() }
         downloaderWatchTasks = [:]
         downloaderWatchTokens = [:]
@@ -2093,11 +2138,16 @@ final class DownloadsViewModel: ObservableObject {
     }
 
     private func reconcileWatching(_ appState: AppState) {
-        guard isWatching else { return }
+        guard isWatching, UIApplication.shared.applicationState != .background else { return }
         if speedWatchTask == nil || speedWatchTask?.isCancelled == true {
             let reference = WeakReference(self)
+            let taskID = UUID()
+            speedWatchTaskID = taskID
             speedWatchTask = Task {
                 await Self.watchDownloaderSpeeds(reference, appState: appState)
+                guard reference.value?.speedWatchTaskID == taskID else { return }
+                reference.value?.speedWatchTask = nil
+                reference.value?.speedWatchTaskID = nil
             }
         }
 
@@ -2150,7 +2200,7 @@ final class DownloadsViewModel: ObservableObject {
                 let stream = APIClient.shared.streamWebSocket(
                     baseURL: appState.baseURL,
                     path: APIPath.downloaderSpeed,
-                    token: appState.accessToken,
+                    token: try await appState.realtimeAccessToken(),
                     subscription: ["interval": DownloaderRefreshDefaults.speedInterval]
                 )
                 for try await event in stream {
@@ -2163,7 +2213,6 @@ final class DownloadsViewModel: ObservableObject {
                 }
             } catch {
                 guard reference.value?.isWatching == true, !Task.isCancelled else { return }
-                guard !isRequestCancellation(error) else { return }
                 let message = error.localizedDescription
                 if message != lastErrorMessage {
                     recordAppLog(.warning, "下载器速度连接中断：\(message)")
@@ -2292,6 +2341,14 @@ final class DownloadsViewModel: ObservableObject {
         downloader: DownloaderItem,
         token: UUID
     ) async {
+        defer {
+            if reference.value?.downloaderWatchTokens[downloader.id] == token {
+                reference.value?.downloaderWatchTasks[downloader.id] = nil
+                reference.value?.downloaderWatchTokens[downloader.id] = nil
+                reference.value?.downloaderWatchSignatures[downloader.id] = nil
+                reference.value?.socketConnections.remove(downloader.id)
+            }
+        }
         var reconnectAttempt = 0
         var lastErrorMessage = ""
         var lastReconnectDelay = 0
@@ -2300,7 +2357,7 @@ final class DownloadsViewModel: ObservableObject {
                 let stream = APIClient.shared.streamWebSocket(
                     baseURL: appState.baseURL,
                     path: APIPath.downloaderTorrents,
-                    token: appState.accessToken,
+                    token: try await appState.realtimeAccessToken(),
                     subscription: [
                         "downloader_id": downloader.id,
                         "interval": reference.value?.refreshInterval ?? DownloaderRefreshDefaults.interval
@@ -2396,7 +2453,7 @@ final class DownloadsViewModel: ObservableObject {
                     reference.value?.socketConnections.remove(downloader.id)
                 }
             } catch {
-                guard !isRequestCancellation(error) else { return }
+                guard !Task.isCancelled else { return }
                 if reference.value?.isCurrentWatch(downloader.id, token: token) == true {
                     reference.value?.socketConnections.remove(downloader.id)
                     let message = error.localizedDescription
@@ -2741,6 +2798,11 @@ struct DownloadsView: View {
             )
         }
         .onDisappear { model.stopWatching() }
+        .recoverDataAfterBackground {
+            model.suspendDataUpdatesForBackground()
+        } onResume: { _ in
+            model.resumeDataUpdates(appState)
+        }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }
         .onChange(of: refreshInterval) { _, _ in synchronizeRefreshSettings() }
         .onChange(of: refreshDuration) { _, _ in synchronizeRefreshSettings() }
@@ -3679,6 +3741,11 @@ struct TorrentListView: View {
             await model.load(appState)
         }
         .onDisappear { model.stopWatching() }
+        .recoverDataAfterBackground {
+            model.suspendDataUpdatesForBackground()
+        } onResume: { _ in
+            model.resumeDataUpdates(appState)
+        }
         .onChange(of: refreshEnabled) { _, _ in synchronizeRefreshSettings() }
         .onChange(of: refreshInterval) { _, _ in synchronizeRefreshSettings() }
         .onChange(of: refreshDuration) { _, _ in synchronizeRefreshSettings() }

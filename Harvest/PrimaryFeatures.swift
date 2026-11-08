@@ -762,6 +762,8 @@ final class DashboardViewModel: ObservableObject {
     private var serverWatchTask: Task<Void, Never>?
     private var serverCountdownTask: Task<Void, Never>?
     private var serverWatchToken: UUID?
+    private var serverContinuous = false
+    private var resumeServerAfterBackground = false
     private var serverViewActive = false
     private var serverResourceVisible = true
     private var serverInterval = DashboardServerRefreshDefaults.interval
@@ -770,6 +772,7 @@ final class DashboardViewModel: ObservableObject {
     private var cacheRestoreTask: Task<Void, Never>?
     private var dashboardLoadInProgress = false
     private var downloaderSpeedTask: Task<Void, Never>?
+    private var downloaderSpeedTaskID: UUID?
     private var siteUnreadTask: Task<Void, Never>?
     private var downloaderSpeedMonitoring = false
     private var downloaders: [DownloaderItem] = []
@@ -1001,9 +1004,15 @@ final class DashboardViewModel: ObservableObject {
 
     func startDownloaderSpeedMonitoring(_ appState: AppState) {
         downloaderSpeedMonitoring = true
+        guard UIApplication.shared.applicationState != .background else { return }
         guard downloaderSpeedTask == nil || downloaderSpeedTask?.isCancelled == true else { return }
+        let taskID = UUID()
+        downloaderSpeedTaskID = taskID
         downloaderSpeedTask = Task { [weak self] in
             await self?.watchDownloaderSpeeds(appState)
+            guard self?.downloaderSpeedTaskID == taskID else { return }
+            self?.downloaderSpeedTask = nil
+            self?.downloaderSpeedTaskID = nil
         }
     }
 
@@ -1011,6 +1020,28 @@ final class DashboardViewModel: ObservableObject {
         downloaderSpeedMonitoring = false
         downloaderSpeedTask?.cancel()
         downloaderSpeedTask = nil
+        downloaderSpeedTaskID = nil
+    }
+
+    func suspendDataUpdatesForBackground() {
+        // Keep the requested monitoring state and displayed data, but release the live connection.
+        downloaderSpeedTask?.cancel()
+        downloaderSpeedTask = nil
+        downloaderSpeedTaskID = nil
+        resumeServerAfterBackground = serverMonitoring
+        stopActiveServerMonitoring(clearRemaining: true)
+        recordAppLog(.info, "仪表盘进入后台，已停止实时连接和资源监控计时")
+    }
+
+    func resumeDataUpdates(_ appState: AppState) {
+        guard UIApplication.shared.applicationState != .background else { return }
+        if downloaderSpeedMonitoring { startDownloaderSpeedMonitoring(appState) }
+        let resumeServer = resumeServerAfterBackground || !serverContinuous
+        resumeServerAfterBackground = false
+        if serverViewActive, serverResourceVisible, resumeServer {
+            beginServerMonitoring(appState, continuous: serverContinuous)
+        }
+        recordAppLog(.info, "仪表盘返回前台，正在恢复数据连接")
     }
 
     private func loadDownloaderSpeeds(_ appState: AppState) async {
@@ -1037,7 +1068,7 @@ final class DashboardViewModel: ObservableObject {
                 let stream = APIClient.shared.streamWebSocket(
                     baseURL: appState.baseURL,
                     path: APIPath.downloaderSpeed,
-                    token: appState.accessToken,
+                    token: try await appState.realtimeAccessToken(),
                     subscription: ["interval": DashboardDownloaderSpeedDefaults.interval]
                 )
                 for try await event in stream {
@@ -1069,7 +1100,6 @@ final class DashboardViewModel: ObservableObject {
                 }
             } catch {
                 guard downloaderSpeedMonitoring, !Task.isCancelled else { return }
-                guard !isRequestCancellation(error) else { return }
                 let message = error.localizedDescription
                 if message != lastErrorMessage {
                     recordAppLog(.warning, "仪表盘下载器速度连接中断：\(message)")
@@ -1128,6 +1158,7 @@ final class DashboardViewModel: ObservableObject {
         serverInterval = min(max(interval, DashboardServerRefreshDefaults.range.lowerBound), DashboardServerRefreshDefaults.range.upperBound)
         serverDuration = min(max(duration, DashboardServerRefreshDefaults.range.lowerBound), DashboardServerRefreshDefaults.range.upperBound)
         guard visible else {
+            resumeServerAfterBackground = false
             stopActiveServerMonitoring(clearRemaining: true)
             return
         }
@@ -1145,12 +1176,19 @@ final class DashboardViewModel: ObservableObject {
 
     func stopServerMonitoring() {
         serverViewActive = false
+        resumeServerAfterBackground = false
         stopActiveServerMonitoring(clearRemaining: true)
     }
 
     private func beginServerMonitoring(_ appState: AppState, continuous: Bool) {
         stopActiveServerMonitoring(clearRemaining: false)
         guard serverViewActive, serverResourceVisible else { return }
+        serverContinuous = continuous
+        guard UIApplication.shared.applicationState != .background else {
+            resumeServerAfterBackground = true
+            return
+        }
+        resumeServerAfterBackground = false
         serverMonitoring = true
         serverConnected = false
         serverError = nil
@@ -1188,7 +1226,7 @@ final class DashboardViewModel: ObservableObject {
                 for try await event in APIClient.shared.streamSSE(
                     baseURL: appState.baseURL,
                     path: APIPath.serverStatus,
-                    token: appState.accessToken,
+                    token: try await appState.realtimeAccessToken(),
                     method: .get,
                     query: ["interval": serverInterval]
                 ) {
@@ -1670,7 +1708,9 @@ struct DashboardView: View {
             guard autoRefresh else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(max(30, refreshInterval)))
-                if !Task.isCancelled { await model.load(appState, days: trendDays) }
+                if !Task.isCancelled, UIApplication.shared.applicationState != .background {
+                    await model.load(appState, days: trendDays)
+                }
             }
         }
         .task(id: "\(model.isLoading)-\(showServerResources)-\(serverResourceAutoStart)-\(serverResourceInterval)-\(serverResourceDuration)") {
@@ -1689,6 +1729,12 @@ struct DashboardView: View {
         .onDisappear {
             model.stopServerMonitoring()
             model.stopDownloaderSpeedMonitoring()
+        }
+        .recoverDataAfterBackground {
+            model.suspendDataUpdatesForBackground()
+        } onResume: { duration in
+            model.resumeDataUpdates(appState)
+            if duration >= 30 { await model.load(appState, days: trendDays) }
         }
         .navigationTitle("仪表盘")
         .navigationBarTitleDisplayMode(.inline)
